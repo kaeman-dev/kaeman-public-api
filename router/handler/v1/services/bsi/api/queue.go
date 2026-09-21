@@ -12,17 +12,12 @@ import (
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
 	"github.com/kaeman-dev/kaeman-public-api/model"
 	"github.com/kaeman-dev/kaeman-public-api/response"
-	"gorm.io/gorm"
 )
 
-type Handler struct {
-	DB *gorm.DB
-}
+type BSIQueue struct {
+	Kind string `json:"kind"`
 
-type ircRequest struct {
-	Kind     string    `json:"kind"`
-
-	Content  string    `json:"content"`
+	Content string `json:"content"`
 
 	Time     time.Time `json:"time"`
 	Lobby    string    `json:"lobby"`
@@ -32,17 +27,17 @@ type ircRequest struct {
 	Note     string    `json:"note"`
 }
 
-	func (h Handler) Send(c *gin.Context) error {
+func (h Handler) Send(c *gin.Context) error {
 	player := c.MustGet("minecraftJWT").(*jwt.Claims).Data.Minecraft
-	var input ircRequest
+	var input BSIQueue
 	if err := response.Decode(c, &input); err != nil {
-		return err
+		return response.NewError(http.StatusBadRequest, err.Error())
 	}
 	var data gin.H
 	switch input.Kind {
 	case "chat":
 		if strings.TrimSpace(input.Content) == "" {
-			return response.Error(http.StatusBadRequest, "Message must not be blank")
+			return response.NewError(http.StatusBadRequest, "Message must not be blank")
 		}
 		data = gin.H{"type": "irc.recv", "kind": "chat", "rawContent": gin.H{
 			"text": "BSIRC > ", "color": "light_purple",
@@ -57,10 +52,10 @@ type ircRequest struct {
 		}}
 	case "splash":
 		if _, ok := c.Get("publicJWT"); !ok {
-			return response.Error(http.StatusUnauthorized, "Public-API-Key header required")
+			return response.NewError(http.StatusUnauthorized, "Public-API-Key header required")
 		}
 		if input.Time.IsZero() || strings.TrimSpace(input.Lobby) == "" || input.LobbyID < 1 {
-			return response.Error(http.StatusBadRequest, "Valid time, lobby and lobbyID are required")
+			return response.NewError(http.StatusBadRequest, "Valid time, lobby and lobbyID are required")
 		}
 		id := uuid.NewString()
 		splash := gin.H{"id": id, "time": input.Time, "lobby": input.Lobby, "lobbyID": input.LobbyID, "minecraft": player}
@@ -96,18 +91,18 @@ type ircRequest struct {
 			},
 		}, "splash": splash}
 	default:
-		return response.Error(http.StatusBadRequest, "Unknown message kind")
+		return response.NewError(http.StatusBadRequest, "Unknown message kind")
 	}
 	payload, err := json.Marshal(gin.H{"msg": "ok", "data": data})
 	if err != nil {
-		return response.Error(http.StatusInternalServerError, "Cannot encode message")
+		return response.NewError(http.StatusInternalServerError, "Cannot encode message")
 	}
 	eventID := uuid.NewString()
 	if id, ok := data["splash"]; ok {
 		eventID = id.(gin.H)["id"].(string)
 	}
-	if err := h.DB.WithContext(c.Request.Context()).Create(&model.Event{ID: eventID, Payload: payload}).Error; err != nil {
-		return response.Error(http.StatusServiceUnavailable, "Cannot enqueue broadcast")
+	if err := h.Services.DB.WithContext(c.Request.Context()).Create(&model.Event{ID: eventID, Payload: payload}).Error; err != nil {
+		return response.NewError(http.StatusServiceUnavailable, "Cannot enqueue broadcast")
 	}
-	return response.NewResponse[any]("ok", nil).WithStatus(http.StatusAccepted).Write(c)
+	return response.NewData[any]("ok", nil).WithStatus(http.StatusAccepted).Write(c)
 }

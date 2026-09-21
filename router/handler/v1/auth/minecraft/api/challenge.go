@@ -23,12 +23,12 @@ func (h Handler) Challenge(c *gin.Context) error {
 	serverID := uuid.NewString()
 
 	if err := h.Services.Cache.Set(c.Request.Context(), challengeKeyPrefix+serverID, "", challengeTTL); err != nil {
-		return response.Error(http.StatusServiceUnavailable, "Cannot save challenge")
+		return response.NewError(http.StatusServiceUnavailable, "Cannot save challenge")
 	}
 
 	c.Header("Cache-Control", "no-store")
 
-	return response.NewResponse("ok", Challenge{
+	return response.NewData("ok", Challenge{
 		ServerID:  serverID,
 		ExpiresAt: time.Now().UTC().Add(challengeTTL),
 	}).Write(c)

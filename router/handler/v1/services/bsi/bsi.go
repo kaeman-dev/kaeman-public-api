@@ -9,6 +9,8 @@ import (
 )
 
 func Register(rg *gin.RouterGroup, deps *server.Services) {
-	h := api.Handler{DB: deps.DB}
-	rg.POST("/irc", middleware.MinecraftToken(deps.Tokens), middleware.OptionalPublicAPIKey(deps.DB, deps.Tokens, middleware.PublicAPIKeyHeader, model.SplashQueue, true), middleware.RateLimit(deps.Cache), middleware.Wrap(h.Send))
+	h := api.Handler{Services: deps}
+	rg.POST("/queue", middleware.MinecraftToken(deps.Tokens),
+		middleware.OptionalPublicAPIKey(deps.DB, deps.Tokens, middleware.PublicAPIKeyHeader, model.SplashQueue, true),
+		middleware.RateLimit(deps.Cache), middleware.Wrap(h.Send))
 }

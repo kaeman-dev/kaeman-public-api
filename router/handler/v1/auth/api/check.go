@@ -8,5 +8,5 @@ import (
 
 func Check(c *gin.Context) error {
 	claims := c.MustGet("publicJWT").(*jwt.Claims)
-	return response.NewResponse("ok", gin.H{"minecraft": claims.Data.Minecraft, "permissions": *claims.Data.Permissions, "expiresAt": claims.ExpiresAt.Time}).Write(c)
+	return response.NewData("ok", gin.H{"minecraft": claims.Data.Minecraft, "permissions": *claims.Data.Permissions, "expiresAt": claims.ExpiresAt.Time}).Write(c)
 }

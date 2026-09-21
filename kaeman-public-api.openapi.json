@@ -2,24 +2,24 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Kaeman 公共 API",
-    "version": "1.0.0",
-    "description": "REST 负责认证与发布，WSS 只提供匿名广播。身份由服务端经 Mojang 验证构建，不信任客户端声明。所有响应根结构统一为 {msg, data}。请求体上限 16 KiB。"
+    "version": "1.1.0",
+    "description": "REST 负责认证与发布，WSS 只提供匿名广播。身份由服务端经 Mojang 验证构建，不信任客户端声明。所有成功响应根结构为 {msg: \"ok\", data?}，所有错误响应根结构为 {msg: <具体错误文案>, data: {traceId}}（msg 非固定值）。请求体上限 16 KiB，且拒绝未知字段、要求单个 JSON 对象。限流统一为令牌桶：默认 60 次/分/维度（burst 60，每秒回填 1），Public API JWT 的 data.ratelimit 可覆盖配额；超限返回 429 并带 Retry-After。详见 x-changelog（废弃与变更）。"
   },
   "tags": [
     {"name":"认证","description":"凭证检查与 Minecraft 正版验证"},
-    {"name":"服务","description":"服务状态与网关发现"},
-    {"name":"BSI","description":"IRC 消息发布与广播，聊天与 Splash 共用"}
+    {"name":"BSI","description":"IRC 消息发布与广播，聊天与 Splash 共用；广播订阅见 /ws/bsi"}
   ],
   "security": [],
   "paths": {
     "/v1/auth/check": {
       "get": {
         "operationId":"checkApiKey","summary":"检查 Public API JWT","tags":["认证"],
-        "description":"返回凭证绑定的身份和权限。需要 Public API JWT。",
+        "description":"返回凭证绑定的身份和权限。Authorization 填 Bearer Public API JWT（aud=public-api，需在服务端 PublicToken 注册且未撤销）。限流按 FullPath + keyID + IP 维度执行（默认 60 次/分，JWT ratelimit 可覆盖）。",
         "security":[{"PublicApiJWT":[]}],
         "responses": {
           "200":{"description":"凭证有效","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/PublicApiCheckResponse"}}}},
           "401":{"$ref":"#/components/responses/Unauthorized"},
+          "429":{"$ref":"#/components/responses/RateLimited"},
           "503":{"$ref":"#/components/responses/Unavailable"},
           "404":{"$ref":"#/components/responses/NotFound"},
           "405":{"$ref":"#/components/responses/MethodNotAllowed"},
@@ -27,20 +27,10 @@
         }
       }
     },
-    "/v1/services/status": {
-      "get": {
-        "operationId":"getServiceStatus","summary":"查询服务状态和 WSS 地址","tags":["服务"],
-        "description":"公开接口，无需登录。返回统一广播网关地址。",
-        "responses": {
-          "200":{"description":"服务状态","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ServiceStatusResponse"},"example":{"msg":"ok","data":{"bsi":{"status":"online","wssGateway":"wss://example.com/ws/bsi"}}}}}},
-          "404":{"$ref":"#/components/responses/NotFound"},"405":{"$ref":"#/components/responses/MethodNotAllowed"},"500":{"$ref":"#/components/responses/InternalError"}
-        }
-      }
-    },
     "/v1/auth/minecraft/challenge": {
       "post": {
         "operationId":"createMinecraftChallenge","summary":"获取正版验证挑战","tags":["认证"],
-        "description":"公开接口。挑战两分钟有效，单次使用。客户端用 Minecraft 登录会话调用 Mojang joinServer 提交返回的 serverID。限 10 次/分/IP。",
+        "description":"公开接口，无需请求体（有请求体会被忽略）。挑战两分钟有效，单次使用（verify 中原子消费，并发复用返回 401）。客户端用 Minecraft 登录会话调用 Mojang joinServer 提交返回的 serverID（带连字符 UUID）。限流按 FullPath + IP 维度执行（默认 60 次/分）。",
         "responses": {
           "200":{"description":"验证挑战","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ChallengeResponse"}}}},
           "429":{"$ref":"#/components/responses/RateLimited"},"503":{"$ref":"#/components/responses/Unavailable"},"404":{"$ref":"#/components/responses/NotFound"},"405":{"$ref":"#/components/responses/MethodNotAllowed"},"500":{"$ref":"#/components/responses/InternalError"}
@@ -50,7 +40,7 @@
     "/v1/auth/minecraft/verify": {
       "post": {
         "operationId":"verifyMinecraftSession","summary":"验证正版会话并签发 Minecraft JWT","tags":["认证"],
-        "description":"完成 joinServer 后提交。服务端以 Mojang hasJoined 结果为准，签发 24 小时有效的 Minecraft JWT。限 20 次/分/IP。",
+        "description":"完成 joinServer 后提交。服务端先查 Mojang profile 取正名，再以 Mojang hasJoined（username + serverId）结果为准，签发 24 小时有效的 Minecraft JWT（aud=minecraft-session，不含权限）。请求体拒绝未知字段。限流按 FullPath + IP 维度执行（默认 60 次/分）。",
         "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/VerifyRequest"},"example":{"serverID":"550e8400-e29b-41d4-a716-446655440000","uuid":"069a79f444e94726a5befca90e38aaf5"}}}},
         "responses": {
           "200":{"description":"Minecraft JWT","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/MinecraftTokenResponse"}}}},
@@ -61,64 +51,96 @@
     "/v1/services/bsi/irc": {
       "post": {
         "operationId":"sendIrcMessage","summary":"发布 IRC 消息","tags":["BSI"],
-        "description":"用 kind 区分消息类型。需要 Minecraft JWT，发送者身份取自该凭证。kind=splash 额外要求 Public-API-Key（Public API JWT，含 SplashQueue 权限位且 UUID 与 Minecraft JWT 一致）。广播使用同一 kind 投递。聊天限 30 次/分/UUID+IP。",
+        "description":"用 kind 区分消息类型。Authorization 填 Bearer Minecraft JWT（发送者身份取自该凭证）。kind=splash 时必须额外携带 Public-API-Key 头（填 Public API JWT，须含 SplashQueue 权限位且 UUID 与 Minecraft JWT 一致）；kind=chat 时该头可选（携带则参与限流 key）。请求体拒绝未知字段。广播使用同一 kind 投递。限流按 FullPath 维度执行：无该头时按 IP，有该头时按 keyID + IP（默认 60 次/分，JWT ratelimit 可覆盖）。",
         "security":[{"MinecraftJWT":[]}],
+        "parameters":[{"$ref":"#/components/parameters/PublicApiKeyHeader"}],
         "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/IrcSendRequest"},"examples":{"chat":{"summary":"普通聊天","value":{"kind":"chat","content":"有人准备喷药吗？"}},"splash":{"summary":"喷药通知","value":{"kind":"splash","time":"2026-09-21T12:05:00Z","lobby":"HUB","lobbyID":8,"serverID":"M4E","location":"市政厅画框","note":"提前到场"}}}}}},
         "responses": {
-          "202":{"description":"已接受广播请求","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/SuccessResponse"},"example":{"msg":"ok"}}}},
+          "202":{"description":"已接受广播请求，body 为 {msg: \"ok\"}（无 data）","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/SuccessResponse"},"example":{"msg":"ok"}}}},
           "400":{"$ref":"#/components/responses/BadRequest"},"401":{"$ref":"#/components/responses/Unauthorized"},"403":{"$ref":"#/components/responses/Forbidden"},"429":{"$ref":"#/components/responses/RateLimited"},"503":{"$ref":"#/components/responses/Unavailable"},"404":{"$ref":"#/components/responses/NotFound"},"405":{"$ref":"#/components/responses/MethodNotAllowed"},"500":{"$ref":"#/components/responses/InternalError"}
+        }
+      }
+    },
+    "/ws/bsi": {
+      "get": {
+        "operationId":"subscribeBsi","summary":"订阅 BSI 广播（WebSocket）","tags":["BSI"],
+        "description":"固定路径，无需服务发现。匿名只读：服务端只发 text 帧 {msg: \"ok\", data: {type: \"irc.recv\", kind, rawContent, splash?}}，忽略客户端消息；客户端读取上限 1024 字节，服务端每 30 秒 ping（5 秒超时）。只做在线广播，不回放、不补发；每客户端队列 32 条，慢客户端会被断开；ping 超时也会断开。",
+        "responses": {
+          "101":{"description":"协议切换成功，后续为 server-to-client text 帧（schema 见 x-websocket）","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"}}},
+          "400":{"$ref":"#/components/responses/BadRequest"},
+          "503":{"$ref":"#/components/responses/Unavailable"}
         }
       }
     }
   },
   "x-jwt": {
-    "description":"两种 JWT 均为 HS256，必须验证签名、iss、aud、exp 和撤销状态。身份只看 data.minecraft.uuid。Public API JWT 由授权后台签发；Minecraft JWT 由 verify 接口签发，不含权限。",
+    "description":"两种 JWT 均为 HS256，必须验证签名、iss=kaeman-public-api、aud、exp/iat（要求 exp > iat 且 jti 非空，name 匹配 ^[A-Za-z0-9_]{1,16}$，uuid 为 32 位小写十六进制无连字符）。Public API JWT 须在服务端 PublicToken 注册且未撤销；minecraft-session 不得携带 permissions/ratelimit。身份只看 data.minecraft.uuid。",
     "publicApi":{"$ref":"#/components/schemas/PublicApiJWTClaims"},
     "minecraftSession":{"$ref":"#/components/schemas/MinecraftJWTClaims"}
   },
   "x-websocket": {
-    "description":"地址来自 status 接口。匿名只读，不接受客户端消息。连接建立后不会被主动踢下线。只保在线广播，不回放、不补发；慢客户端会断开。",
+    "description":"固定订阅 GET /ws/bsi，无需认证。匿名只读，不回放、不补发；每 30 秒 ping，写超时 5 秒；客户端读上限 1024 字节；单客户端队列 32 条，满则断开慢客户端。",
     "gateways": {
-      "bsi":{"urlSource":"/v1/services/status -> data.bsi.wssGateway","authentication":"none","direction":"server-to-client","message":{"$ref":"#/components/schemas/IrcReceive"},"example":{"msg":"ok","data":{"type":"irc.recv","kind":"chat","rawContent":{"text":"BSIRC > ","color":"light_purple","extra":[{"text":"ExampleIGN","bold":true,"clickEvent":{"action":"suggest_command","value":"/msg ExampleIGN "},"hoverEvent":{"action":"show_text","contents":{"text":"点击私聊","color":"gray"}}},{"text":": 有人准备喷药吗？","color":"white"}]}}},"splashExample":{"msg":"ok","data":{"type":"irc.recv","kind":"splash","rawContent":{"text":"SPLASH > ","color":"gold","extra":[{"text":"ExampleIGN","bold":true,"hoverEvent":{"action":"show_text","contents":{"text":"市政厅画框\n提前到场","color":"gray"}}},{"text":" 将于 12:05 在 HUB-8 喷药，地点：市政厅画框","color":"yellow"}]},"splash":{"id":"550e8400-e29b-41d4-a716-446655440000","time":"2026-09-21T12:05:00Z","lobby":"HUB","lobbyID":8,"serverID":"M4E","location":"市政厅画框","note":"提前到场","minecraft":{"uuid":"069a79f444e94726a5befca90e38aaf5","name":"ExampleIGN"}}}}}
+      "bsi":{"urlSource":"GET /ws/bsi（固定路径；/v1/services/status 已废弃移除，不再做网关发现）","authentication":"none","direction":"server-to-client","message":{"$ref":"#/components/schemas/IrcReceive"},"example":{"msg":"ok","data":{"type":"irc.recv","kind":"chat","rawContent":{"text":"BSIRC > ","color":"light_purple","extra":[{"text":"ExampleIGN","bold":true,"clickEvent":{"action":"suggest_command","value":"/msg ExampleIGN "},"hoverEvent":{"action":"show_text","contents":{"text":"点击私聊","color":"gray"}}},{"text":": 有人准备喷药吗？","color":"white"}]}}},"splashExample":{"msg":"ok","data":{"type":"irc.recv","kind":"splash","rawContent":{"text":"SPLASH > ","color":"gold","extra":[{"text":"ExampleIGN","bold":true,"hoverEvent":{"action":"show_text","contents":{"text":"市政厅画框\n提前到场","color":"gray"}}},{"text":" 将于 2026-09-21 12:05 在 HUB-8 (M4E) 喷药，地点：市政厅画框","color":"yellow"}]},"splash":{"id":"550e8400-e29b-41d4-a716-446655440000","time":"2026-09-21T12:05:00Z","lobby":"HUB","lobbyID":8,"serverID":"M4E","location":"市政厅画框","note":"提前到场","minecraft":{"uuid":"069a79f444e94726a5befca90e38aaf5","name":"ExampleIGN"}}}}}
     }
   },
+  "x-cors": {
+    "description":"全局 CORS：Access-Control-Allow-Origin: *，暴露 Trace-ID / Retry-After / WWW-Authenticate。预检为 OPTIONS + Access-Control-Request-Method（仅允许 GET/POST，返回 204，Allow-Headers 仅 Authorization/Content-Type/Public-API-Key，Max-Age 600）；非法预检方法返回 405，非法预检头返回 400。",
+    "allowOrigin":"*",
+    "exposeHeaders":["Trace-ID","Retry-After","WWW-Authenticate"],
+    "allowMethods":["GET","POST","OPTIONS"],
+    "allowHeaders":["Authorization","Content-Type","Public-API-Key"],
+    "maxAge":600
+  },
+  "x-changelog": [
+    "移除 GET /v1/services/status（含 ServiceStatusResponse / ServiceEndpoint / “服务” tag）：该路由在 router/handler 中不存在，config 亦无对应 public_wss_url 实现，属于未实现即废弃；网关地址固定为 GET /ws/bsi，不再做服务发现。",
+    "移除 permission 包（Developer/Default/Splasher）：全仓无引用死代码，权限以 model.SplashQueue（1 << 0）为准；PermissionMask 上限 2147483647（int32 max）保持不变。",
+    "移除 config public_wss_url：config/config.go 未定义该字段，示例残留已失效，不作为文档输入。",
+    "变更限流：删除各接口 10/20/30 次/分描述，统一为令牌桶默认 60 次/分/维度（burst 60，约每秒回填 1，空闲 TTL 5 分钟）；维度为 FullPath + IP，无 Public-API-Key 时仅 IP，有效 Public API JWT 时为 keyID + IP；JWT data.ratelimit（>=1）可覆盖配额；超限 msg 为 \"Too many requests\" 并带 Retry-After。",
+    "修正 ErrorResponse.msg：由 const \"Request failed\" 改为 string，服务端返回具体错误文案（如 Bearer JWT required / Unknown or revoked token / Too many requests 等），data.traceId（Trace-ID 对应值）不变。",
+    "新增 PublicApiJWTClaims.data.ratelimit（integer >= 1）：覆盖默认限流配额；minecraft-session 明确不得携带 permissions/ratelimit。",
+    "新增 POST /v1/services/bsi/irc 的 Public-API-Key 头参数声明：kind=splash 必需（缺失返回 401），权限缺失或双凭证 UUID 不一致返回 403；kind=chat 可选携带。",
+    "修正 splash 广播文本示例：服务端格式为 \"将于 YYYY-MM-DD HH:MM 在 {lobby}-{lobbyID}[(serverID)] 喷药[，地点：{location}]\"，hover 为 location 与 note 以换行拼接。",
+    "修正 WebSocket 语义：删除“连接建立后不会被主动踢下线”，明确慢客户端（队列 32 满）、ping 超时（30 秒间隔/5 秒超时）、读超限（1024 字节）均会断开；不回放（Event 仅内部持久化，进线不补发）；新增 /ws/bsi 路径条目。"
+  ],
   "components": {
     "securitySchemes": {
-      "PublicApiJWT":{"type":"http","scheme":"bearer","bearerFormat":"JWT","description":"授权后台签发的 Public API JWT，含权限。"},
-      "MinecraftJWT":{"type":"http","scheme":"bearer","bearerFormat":"JWT","description":"verify 接口签发的 Minecraft JWT，24 小时有效。"},
-      "PublicApiToken":{"type":"apiKey","in":"header","name":"Public-API-Key","description":"仅 kind=splash 时必需，填 Public API JWT。"}
+      "PublicApiJWT":{"type":"http","scheme":"bearer","bearerFormat":"JWT","description":"授权后台签发的 Public API JWT（aud=public-api，含权限与可选 ratelimit，需注册未撤销），放 Authorization: Bearer。"},
+      "MinecraftJWT":{"type":"http","scheme":"bearer","bearerFormat":"JWT","description":"verify 接口签发的 Minecraft JWT（aud=minecraft-session，24 小时有效，不含权限），放 Authorization: Bearer。"},
+      "PublicApiToken":{"type":"apiKey","in":"header","name":"Public-API-Key","description":"条件必需：仅 kind=splash 时必需，填 Public API JWT（须含 SplashQueue 且 UUID 与 Minecraft JWT 一致）。"}
     },
     "headers": {
-      "TraceId":{"description":"服务端生成的请求 UUID","required":true,"schema":{"type":"string","format":"uuid"}},
+      "TraceId":{"description":"请求 ID（Trace 中间件生成或透传），错误体 data.traceId 为同一值","required":true,"schema":{"type":"string","format":"uuid"}},
       "NoStore":{"description":"禁止缓存","schema":{"type":"string","const":"no-store"}}
     },
+    "parameters": {
+      "PublicApiKeyHeader":{"name":"Public-API-Key","in":"header","required":false,"description":"kind=splash 时必需（缺失返回 401），须含 SplashQueue 权限且 UUID 与 Authorization 的 Minecraft JWT 一致，否则 403；kind=chat 时可选。","schema":{"type":"string","minLength":1}}
+    },
     "responses": {
-      "BadRequest":{"description":"请求不合法","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
-      "Unauthorized":{"description":"凭证缺失或无效","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"},"WWW-Authenticate":{"description":"认证质询","schema":{"type":"string","const":"Bearer"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
+      "BadRequest":{"description":"请求不合法（含未知字段、JSON 非单个对象、字段校验失败）","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
+      "Unauthorized":{"description":"凭证缺失或无效（含挑战失效、Mojang 校验失败、splash 缺 Public-API-Key 头、token 未知/已撤销）","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"},"WWW-Authenticate":{"description":"认证质询","schema":{"type":"string","const":"Bearer"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
       "Forbidden":{"description":"缺少权限或双凭证 UUID 不一致","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
-      "RateLimited":{"description":"请求过于频繁","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"},"Retry-After":{"description":"建议等待秒数","schema":{"type":"integer","minimum":0}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
-      "Unavailable":{"description":"依赖服务暂不可用","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
+      "RateLimited":{"description":"令牌桶超限（默认 60 次/分/维度，JWT ratelimit 可覆盖），msg 为 \"Too many requests\"","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"},"Retry-After":{"description":"建议等待秒数","schema":{"type":"integer","minimum":0}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
+      "Unavailable":{"description":"依赖服务暂不可用（含 token 注册表、challenge 存储、Mojang、广播入队）","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
       "NotFound":{"description":"路径不存在","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
       "MethodNotAllowed":{"description":"方法不支持","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"},"Allow":{"description":"支持的方法","schema":{"type":"string"}}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}},
-      "InternalError":{"description":"内部错误，原因查日志","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}}
+      "InternalError":{"description":"内部错误，原因查日志（以 traceId 关联）","headers":{"Trace-ID":{"$ref":"#/components/headers/TraceId"},"Cache-Control":{"$ref":"#/components/headers/NoStore"}},"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ErrorResponse"}}}}
     },
     "schemas": {
       "SuccessResponse":{"type":"object","properties":{"msg":{"type":"string","const":"ok"}},"required":["msg"]},
-      "ErrorResponse":{"type":"object","additionalProperties":false,"properties":{"msg":{"type":"string","const":"Request failed"},"data":{"type":"object","additionalProperties":false,"properties":{"traceId":{"type":"string","format":"uuid","description":"用于查询日志"}},"required":["traceId"]}},"required":["msg","data"],"examples":[{"msg":"Request failed","data":{"traceId":"550e8400-e29b-41d4-a716-446655440000"}}]},
+      "ErrorResponse":{"type":"object","additionalProperties":false,"properties":{"msg":{"type":"string","description":"服务端返回的具体错误文案，非固定值"},"data":{"type":"object","additionalProperties":false,"properties":{"traceId":{"type":"string","format":"uuid","description":"用于查询日志，与 Trace-ID 响应头对应"}},"required":["traceId"]}},"required":["msg","data"],"examples":[{"msg":"Bearer JWT required","data":{"traceId":"550e8400-e29b-41d4-a716-446655440000"}},{"msg":"Too many requests","data":{"traceId":"550e8400-e29b-41d4-a716-446655440000"}}]},
       "MinecraftUUID":{"type":"string","pattern":"^[0-9a-f]{32}$","description":"32 位小写十六进制，不含连字符"},
       "MinecraftIdentity":{"type":"object","additionalProperties":false,"properties":{"uuid":{"$ref":"#/components/schemas/MinecraftUUID"},"name":{"type":"string","pattern":"^[A-Za-z0-9_]{1,16}$","description":"仅用于展示"}},"required":["uuid","name"],"examples":[{"uuid":"069a79f444e94726a5befca90e38aaf5","name":"ExampleIGN"}]},
       "PermissionMask":{"type":"integer","minimum":0,"maximum":2147483647,"description":"SplashQueue = 1 << 0"},
-      "JWTStandardClaims":{"type":"object","properties":{"iss":{"type":"string","const":"kaeman-public-api"},"jti":{"type":"string","minLength":1},"iat":{"type":"integer","minimum":0},"exp":{"type":"integer","minimum":0,"description":"Unix 秒"}},"required":["iss","jti","iat","exp"]},
-      "PublicApiJWTClaims":{"description":"aud=public-api","allOf":[{"$ref":"#/components/schemas/JWTStandardClaims"},{"type":"object","properties":{"aud":{"type":"string","const":"public-api"},"data":{"type":"object","additionalProperties":false,"properties":{"minecraft":{"$ref":"#/components/schemas/MinecraftIdentity"},"permissions":{"$ref":"#/components/schemas/PermissionMask"}},"required":["minecraft","permissions"]}},"required":["aud","data"]}]},
-      "MinecraftJWTClaims":{"description":"aud=minecraft-session，不含权限","allOf":[{"$ref":"#/components/schemas/JWTStandardClaims"},{"type":"object","properties":{"aud":{"type":"string","const":"minecraft-session"},"data":{"type":"object","additionalProperties":false,"properties":{"minecraft":{"$ref":"#/components/schemas/MinecraftIdentity"}},"required":["minecraft"]}},"required":["aud","data"]}]},
+      "JWTStandardClaims":{"type":"object","properties":{"iss":{"type":"string","const":"kaeman-public-api"},"jti":{"type":"string","minLength":1,"description":"Public API JWT 须在 PublicToken 注册且未撤销"},"iat":{"type":"integer","minimum":0},"exp":{"type":"integer","minimum":0,"description":"Unix 秒，须晚于 iat"}},"required":["iss","jti","iat","exp"]},
+      "PublicApiJWTClaims":{"description":"aud=public-api","allOf":[{"$ref":"#/components/schemas/JWTStandardClaims"},{"type":"object","properties":{"aud":{"type":"string","const":"public-api"},"data":{"type":"object","additionalProperties":false,"properties":{"minecraft":{"$ref":"#/components/schemas/MinecraftIdentity"},"permissions":{"$ref":"#/components/schemas/PermissionMask"},"ratelimit":{"type":"integer","minimum":1,"description":"覆盖默认 60 次/分限流配额"}},"required":["minecraft","permissions"]}},"required":["aud","data"]}]},
+      "MinecraftJWTClaims":{"description":"aud=minecraft-session，不含 permissions/ratelimit","allOf":[{"$ref":"#/components/schemas/JWTStandardClaims"},{"type":"object","properties":{"aud":{"type":"string","const":"minecraft-session"},"data":{"type":"object","additionalProperties":false,"properties":{"minecraft":{"$ref":"#/components/schemas/MinecraftIdentity"}},"required":["minecraft"]}},"required":["aud","data"]}]},
       "PublicApiCheckResponse":{"allOf":[{"$ref":"#/components/schemas/SuccessResponse"},{"type":"object","properties":{"data":{"type":"object","properties":{"minecraft":{"$ref":"#/components/schemas/MinecraftIdentity"},"permissions":{"$ref":"#/components/schemas/PermissionMask"},"expiresAt":{"type":"string","format":"date-time"}},"required":["minecraft","permissions","expiresAt"]}},"required":["data"]}]},
-      "ServiceEndpoint":{"type":"object","properties":{"status":{"type":"string","enum":["online","offline","error"]},"wssGateway":{"type":"string","format":"uri","pattern":"^wss://"}},"required":["status"],"if":{"properties":{"status":{"const":"online"}},"required":["status"]},"then":{"required":["wssGateway"]}},
-      "ServiceStatusResponse":{"allOf":[{"$ref":"#/components/schemas/SuccessResponse"},{"type":"object","properties":{"data":{"type":"object","properties":{"bsi":{"$ref":"#/components/schemas/ServiceEndpoint"}},"required":["bsi"]}},"required":["data"]}]},
-      "ChallengeResponse":{"allOf":[{"$ref":"#/components/schemas/SuccessResponse"},{"type":"object","properties":{"data":{"type":"object","properties":{"serverID":{"type":"string","format":"uuid"},"expiresAt":{"type":"string","format":"date-time"}},"required":["serverID","expiresAt"]}},"required":["data"]}]},
-      "VerifyRequest":{"type":"object","additionalProperties":false,"properties":{"serverID":{"type":"string","format":"uuid"},"uuid":{"$ref":"#/components/schemas/MinecraftUUID"}},"required":["serverID","uuid"]},
+      "ChallengeResponse":{"allOf":[{"$ref":"#/components/schemas/SuccessResponse"},{"type":"object","properties":{"data":{"type":"object","properties":{"serverID":{"type":"string","format":"uuid","description":"带连字符 UUID，joinServer 用"},"expiresAt":{"type":"string","format":"date-time"}},"required":["serverID","expiresAt"]}},"required":["data"]}]},
+      "VerifyRequest":{"type":"object","additionalProperties":false,"properties":{"serverID":{"type":"string","format":"uuid","description":"challenge 返回的 serverID"},"uuid":{"$ref":"#/components/schemas/MinecraftUUID"}},"required":["serverID","uuid"]},
       "MinecraftTokenResponse":{"allOf":[{"$ref":"#/components/schemas/SuccessResponse"},{"type":"object","properties":{"data":{"type":"object","properties":{"accessToken":{"type":"string","minLength":1},"expiresAt":{"type":"string","format":"date-time"}},"required":["accessToken","expiresAt"]}},"required":["data"]}]},
-      "IrcSendRequest":{"description":"kind 区分消息类型","oneOf":[
-        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"chat"},"content":{"type":"string","minLength":1,"pattern":"\\S"}},"required":["kind","content"]},
+      "IrcSendRequest":{"description":"kind 区分消息类型；拒绝未知字段，请求体上限 16 KiB","oneOf":[
+        {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"chat"},"content":{"type":"string","minLength":1,"pattern":"\\S","description":"去除空白后非空"}},"required":["kind","content"]},
         {"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"splash"},"time":{"type":"string","format":"date-time"},"lobby":{"type":"string","minLength":1,"pattern":"\\S"},"lobbyID":{"type":"integer","minimum":1},"serverID":{"type":"string"},"location":{"type":"string"},"note":{"type":"string"}},"required":["kind","time","lobby","lobbyID"]}
       ]},
       "IrcReceiveData":{"type":"object","properties":{"type":{"type":"string","const":"irc.recv"},"kind":{"type":"string","enum":["chat","splash"]},"rawContent":{"$ref":"#/components/schemas/MinecraftTextComponent","description":"服务端渲染的聊天组件，Mod 直接按原版方式解析"},"splash":{"$ref":"#/components/schemas/IrcSplashData","description":"仅 kind=splash 时存在"}},"required":["type","kind","rawContent"]},

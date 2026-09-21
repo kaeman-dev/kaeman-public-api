@@ -18,6 +18,7 @@ type Config struct {
 
 type Server struct {
 	ListenAddr string `toml:"listen_addr"`
+	TrustProxies []string `toml:"trust_proxies"`
 }
 
 type Database struct {

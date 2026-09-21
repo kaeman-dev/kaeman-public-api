@@ -6,21 +6,25 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/gin-contrib/requestid"
 	"github.com/gin-gonic/gin"
 )
 
 type Response[T any] struct {
 	status int
 
-	Msg string `json:"msg"`
-	Data T    `json:"data,omitempty"`
+	Msg  string `json:"msg"`
+	Data T      `json:"data,omitempty"`
 }
 
-func NewResponse[T any](msg string, data T) Response[T] {
-	return Response[T]{
-		status: http.StatusOK,
+func New(msg string) Response[any] {
+	return Response[any]{
 		Msg: msg,
+	}
+}
+
+func NewData[T any](msg string, data T) Response[T] {
+	return Response[T]{
+		Msg:  msg,
 		Data: data,
 	}
 }
@@ -30,15 +34,8 @@ func (r Response[T]) WithStatus(status int) Response[T] {
 	return r
 }
 
-func Error(status int, msg string) Response[gin.H] {
-	return NewResponse[gin.H](msg, nil).WithStatus(status)
-}
 func (r Response[T]) Error() string {
 	return r.Msg
-}
-
-func (r Response[T]) Status() int {
-	return r.status
 }
 
 func (r Response[T]) Write(c *gin.Context) error {
@@ -55,29 +52,18 @@ func (r Response[T]) Write(c *gin.Context) error {
 	return nil
 }
 
-func Handle(c *gin.Context, err error) {
-	var resp interface {
-		error
-		Status() int
-	}
-	status, msg := http.StatusInternalServerError, "Unhandled request error"
-	if errors.As(err, &resp) {
-		status, msg = resp.Status(), resp.Error()
-	}
-	_ = NewResponse[gin.H](msg, gin.H{"traceId": requestid.Get(c)}).WithStatus(status).Write(c)
-}
-
-
-
-func Decode(c *gin.Context, target any) error {
+func Decode[T any](c *gin.Context, target *T) error {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
 	d := json.NewDecoder(c.Request.Body)
 	d.DisallowUnknownFields()
 	if err := d.Decode(target); err != nil {
-		return Error(http.StatusBadRequest, "Invalid JSON request")
+		return err
 	}
 	if err := d.Decode(new(any)); err != io.EOF {
-		return Error(http.StatusBadRequest, "Expected a single JSON object")
+		if err == nil {
+			return errors.New("body must contain single JSON value")
+		}
+		return err
 	}
 	return nil
 }

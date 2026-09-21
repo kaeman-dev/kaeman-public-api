@@ -16,7 +16,7 @@ func CORS() gin.HandlerFunc {
 			return
 		}
 		if method := c.GetHeader("Access-Control-Request-Method"); method != http.MethodGet && method != http.MethodPost {
-			_ = c.Error(response.Error(http.StatusMethodNotAllowed, "Unsupported CORS method"))
+			_ = c.Error(response.NewError(http.StatusMethodNotAllowed, "Unsupported CORS method"))
 			c.Abort()
 			return
 		}
@@ -24,7 +24,7 @@ func CORS() gin.HandlerFunc {
 			switch strings.ToLower(strings.TrimSpace(header)) {
 			case "", "authorization", "content-type", "public-api-key":
 			default:
-				_ = c.Error(response.Error(http.StatusBadRequest, "Unsupported CORS header"))
+				_ = c.Error(response.NewError(http.StatusBadRequest, "Unsupported CORS header"))
 				c.Abort()
 				return
 			}

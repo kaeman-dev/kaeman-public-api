@@ -25,7 +25,7 @@ type upgradeWriter struct {
 func (w *upgradeWriter) WriteHeader(status int) {
 	if status >= 400 {
 		w.failed = true
-		_ = w.context.Error(response.Error(status, http.StatusText(status)))
+		_ = w.context.Error(response.NewError(status, http.StatusText(status)))
 		return
 	}
 	w.ResponseWriter.WriteHeader(status)

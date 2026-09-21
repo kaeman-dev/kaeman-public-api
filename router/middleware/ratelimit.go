@@ -70,7 +70,7 @@ func RateLimit(cache storage.KVCache[string]) gin.HandlerFunc {
 		ratelimitMu.Unlock()
 		if retry > 0 {
 			c.Header("Retry-After", strconv.Itoa(retry))
-			_ = c.Error(response.NewResponse[gin.H]("Too many requests", gin.H{}).WithStatus(429))
+			_ = c.Error(response.NewError(429, "Too many requests"))
 			c.Abort()
 			return
 		}

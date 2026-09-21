@@ -6,7 +6,7 @@ import (
 )
 
 func Trace() gin.HandlerFunc {
-    return requestid.New(
-        requestid.WithCustomHeaderStrKey("Trace-ID"),
-    )
+	return requestid.New(
+		requestid.WithCustomHeaderStrKey("Trace-ID"),
+	)
 }

@@ -19,12 +19,12 @@ func extractToken(c *gin.Context, header string) (string, error) {
 	if header == "Authorization" {
 		fields := strings.Fields(value)
 		if len(fields) != 2 || !strings.EqualFold(fields[0], "bearer") {
-			return "", response.Error(http.StatusUnauthorized, "Bearer JWT required")
+			return "", response.NewError(http.StatusUnauthorized, "Bearer JWT required")
 		}
 		value = fields[1]
 	}
 	if value == "" {
-		return "", response.Error(http.StatusUnauthorized, header+" header required")
+		return "", response.NewError(http.StatusUnauthorized, header+" header required")
 	}
 	return value, nil
 }
@@ -36,21 +36,21 @@ func VerifyPublicAPIKey(c *gin.Context, db *gorm.DB, tokens *jwt.Tokens, header 
 	}
 	claims, err := tokens.Parse(value, "public-api")
 	if err != nil {
-		return nil, response.Error(http.StatusUnauthorized, "Invalid public JWT")
+		return nil, response.NewError(http.StatusUnauthorized, "Invalid public JWT")
 	}
 	var record model.PublicToken
 	err = db.WithContext(c.Request.Context()).First(&record, "id = ?", claims.ID).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, response.Error(http.StatusServiceUnavailable, "Token registry unavailable")
+		return nil, response.NewError(http.StatusServiceUnavailable, "Token registry unavailable")
 	}
 	if err != nil || record.Revoked {
-		return nil, response.Error(http.StatusUnauthorized, "Unknown or revoked token")
+		return nil, response.NewError(http.StatusUnauthorized, "Unknown or revoked token")
 	}
 	if permission != 0 && *claims.Data.Permissions&permission != permission {
-		return nil, response.Error(http.StatusForbidden, "Required permission missing")
+		return nil, response.NewError(http.StatusForbidden, "Required permission missing")
 	}
 	if matchUUID != "" && claims.Data.Minecraft.UUID != matchUUID {
-		return nil, response.Error(http.StatusForbidden, "Minecraft UUID mismatch")
+		return nil, response.NewError(http.StatusForbidden, "Minecraft UUID mismatch")
 	}
 	return claims, nil
 }
@@ -99,7 +99,7 @@ func MinecraftToken(tokens *jwt.Tokens) gin.HandlerFunc {
 		}
 		claims, err := tokens.Parse(value, "minecraft-session")
 		if err != nil {
-			_ = c.Error(response.Error(http.StatusUnauthorized, "Invalid Minecraft JWT"))
+			_ = c.Error(response.NewError(http.StatusUnauthorized, "Invalid Minecraft JWT"))
 			c.Abort()
 			return
 		}

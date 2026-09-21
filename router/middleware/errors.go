@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"runtime/debug"
 	"time"
 
@@ -19,6 +20,10 @@ func Wrap(h func(c *gin.Context) error) gin.HandlerFunc {
 			_ = c.Error(err)
 		}
 	}
+}
+
+type Error struct {
+	TraceID string `json:"traceID"`
 }
 
 func Errors(log *slog.Logger) gin.HandlerFunc {
@@ -39,7 +44,13 @@ func Errors(log *slog.Logger) gin.HandlerFunc {
 		if len(c.Errors) == 0 || c.Writer.Written() {
 			return
 		}
-		response.Handle(c, c.Errors.Last().Err)
+
+		var httpErr response.HTTPError
+		status, msg := http.StatusInternalServerError, "Unhandled request error"
+		if errors.As(c.Errors.Last().Err, &httpErr) {
+			status, msg = httpErr.HTTPStatus(), httpErr.Error()
+		}
+		_ = response.NewData(msg, Error{TraceID: requestid.Get(c)}).WithStatus(status).Write(c)
 	}
 }
 
