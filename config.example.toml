@@ -1,0 +1,17 @@
+# HTTP server settings.
+[server]
+listen_addr = ":38080"
+public_wss_url = "wss://example.com"
+
+[database]
+dsn = "./kaeman.db"
+
+[redis]
+addr = ""
+password = ""
+
+[jwt]
+secret = "replace-with-a-random-secret-of-at-least-32-bytes!"
+
+[minecraft]
+mojang_api = "https://sessionserver.mojang.com"
