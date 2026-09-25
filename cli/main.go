@@ -7,10 +7,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/Sn0wo2/caelum"
+	"github.com/eko/gocache/lib/v4/cache"
+	go_cache_store "github.com/eko/gocache/store/go_cache/v4"
+	redis_store "github.com/eko/gocache/store/redis/v4"
 	"github.com/kaeman-dev/kaeman-public-api/config"
 	"github.com/kaeman-dev/kaeman-public-api/gateway"
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
@@ -18,13 +22,24 @@ import (
 	"github.com/kaeman-dev/kaeman-public-api/router"
 	"github.com/kaeman-dev/kaeman-public-api/server"
 	"github.com/kaeman-dev/kaeman-public-api/storage"
+	gocache_lib "github.com/patrickmn/go-cache"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
 	configPath := flag.String("config", "./data/config.toml", "path to the TOML config file")
 	flag.Parse()
 
-	log := caelum.Init(caelum.Config{})
+	style := caelum.DefaultStyle()
+	style.Icons = caelum.IconsNerd
+
+	log := caelum.Init(caelum.Config{
+		Targets: []caelum.Target{
+			{
+				Style: &style,
+			},
+		},
+	})
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -39,19 +54,24 @@ func main() {
 	sqlDB, _ := db.DB()
 	defer sqlDB.Close()
 
-	deps := &server.Services{DB: db, Log: log.Logger, Tokens: &jwt.Tokens{Secret: []byte(cfg.JWT.Secret)}, Minecraft: minecraft.New(cfg.Minecraft.MojangAPI), BSI: &gateway.Hub{}}
+	deps := &server.Services{DB: db, Log: log.Logger, Tokens: &jwt.Tokens{Secret: []byte(cfg.Auth.JWTSecret)}, Minecraft: minecraft.New(cfg.Minecraft.MojangAPI), BSI: &gateway.Hub{}}
 
 	if cfg.Redis.Addr != "" {
-		cache, err := storage.NewRedisKVCache(context.Background(), cfg.Redis.Addr, cfg.Redis.Password)
-		if err != nil {
+		network := "tcp"
+		addr := cfg.Redis.Addr
+		if path, ok := strings.CutPrefix(addr, "unix://"); ok {
+			network, addr = "unix", path
+		}
+		client := redis.NewClient(&redis.Options{Network: network, Addr: addr, Password: cfg.Redis.Password})
+		if err := client.Ping(context.Background()).Err(); err != nil {
+			client.Close()
 			log.Error("connect to Redis", "error", err)
 			os.Exit(1)
 		}
-		deps.Cache = cache
+		deps.Cache = cache.New[string](redis_store.NewRedis(client))
 	} else {
-		deps.Cache = storage.NewMemoryKVCache[string]()
+		deps.Cache = cache.New[string](go_cache_store.NewGoCache(gocache_lib.New(5*time.Minute, 10*time.Minute)))
 	}
-	defer deps.Cache.Close()
 
 	httpServer := &http.Server{Addr: cfg.Server.ListenAddr, Handler: router.NewRouter(deps), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

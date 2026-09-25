@@ -1,9 +1,11 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
+	"github.com/eko/gocache/lib/v4/store"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/kaeman-dev/kaeman-public-api/model"
@@ -25,12 +27,12 @@ func (h Handler) Verify(c *gin.Context) error {
 	if !model.ValidMinecraftUUID(input.UUID) {
 		return response.NewError(http.StatusBadRequest, "Invalid UUID")
 	}
-	_, found, err := h.Services.Cache.Get(c.Request.Context(), challengeKeyPrefix+input.ServerID)
+	_, err := h.Services.Cache.Get(c.Request.Context(), challengeKeyPrefix+input.ServerID)
+	if errors.Is(err, store.NotFound{}) {
+		return response.NewError(http.StatusUnauthorized, "Invalid or expired challenge")
+	}
 	if err != nil {
 		return response.NewError(http.StatusServiceUnavailable, "Challenge store unavailable")
-	}
-	if !found {
-		return response.NewError(http.StatusUnauthorized, "Invalid or expired challenge")
 	}
 	identity, err := h.Services.Minecraft.Profile(c.Request.Context(), input.UUID)
 	if err != nil {
@@ -47,12 +49,15 @@ func (h Handler) Verify(c *gin.Context) error {
 	if err != nil {
 		return response.NewError(http.StatusServiceUnavailable, "Cannot issue token")
 	}
-	consumed, err := h.Services.Cache.Delete(c.Request.Context(), challengeKeyPrefix+input.ServerID)
+	_, err = h.Services.Cache.Get(c.Request.Context(), challengeKeyPrefix+input.ServerID)
+	if errors.Is(err, store.NotFound{}) {
+		return response.NewError(http.StatusUnauthorized, "Challenge already used or expired")
+	}
 	if err != nil {
 		return response.NewError(http.StatusServiceUnavailable, "Challenge store unavailable")
 	}
-	if !consumed {
-		return response.NewError(http.StatusUnauthorized, "Challenge already used or expired")
+	if err = h.Services.Cache.Delete(c.Request.Context(), challengeKeyPrefix+input.ServerID); err != nil {
+		return response.NewError(http.StatusServiceUnavailable, "Challenge store unavailable")
 	}
 	c.Header("Cache-Control", "no-store")
 	return response.NewData("ok", gin.H{"accessToken": token, "expiresAt": claims.ExpiresAt.Time}).Write(c)

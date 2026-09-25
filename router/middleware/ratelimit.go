@@ -7,10 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eko/gocache/lib/v4/cache"
+	"github.com/eko/gocache/lib/v4/store"
 	"github.com/gin-gonic/gin"
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
 	"github.com/kaeman-dev/kaeman-public-api/response"
-	"github.com/kaeman-dev/kaeman-public-api/storage"
 )
 
 const (
@@ -26,7 +27,7 @@ type ratelimitState struct {
 
 var ratelimitMu sync.Mutex
 
-func RateLimit(cache storage.KVCache[string]) gin.HandlerFunc {
+func RateLimit(cache *cache.Cache[string]) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		count := DefaultRatelimit
 		key := ratelimitKeyPrefix + c.FullPath() + ":ip:" + c.ClientIP()
@@ -43,7 +44,7 @@ func RateLimit(cache storage.KVCache[string]) gin.HandlerFunc {
 		ctx := c.Request.Context()
 		ratelimitMu.Lock()
 		state := ratelimitState{Tokens: burst, Last: now.UnixNano()}
-		if raw, found, _ := cache.Get(ctx, key); found {
+		if raw, err := cache.Get(ctx, key); err == nil {
 			if err := json.Unmarshal([]byte(raw), &state); err != nil || state.Tokens < 0 || state.Tokens > burst {
 				state = ratelimitState{Tokens: burst, Last: now.UnixNano()}
 			} else {
@@ -65,7 +66,7 @@ func RateLimit(cache storage.KVCache[string]) gin.HandlerFunc {
 			}
 		}
 		if encoded, err := json.Marshal(state); err == nil {
-			_ = cache.Set(ctx, key, string(encoded), RatelimitIdleTTL)
+			_ = cache.Set(ctx, key, string(encoded), store.WithExpiration(RatelimitIdleTTL))
 		}
 		ratelimitMu.Unlock()
 		if retry > 0 {

@@ -3,10 +3,10 @@ package server
 import (
 	"log/slog"
 
+	"github.com/eko/gocache/lib/v4/cache"
 	"github.com/kaeman-dev/kaeman-public-api/gateway"
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
 	"github.com/kaeman-dev/kaeman-public-api/minecraft"
-	"github.com/kaeman-dev/kaeman-public-api/storage"
 	"gorm.io/gorm"
 )
 
@@ -15,6 +15,6 @@ type Services struct {
 	Log       *slog.Logger
 	Tokens    *jwt.Tokens
 	Minecraft *minecraft.Client
-	Cache     storage.KVCache[string]
+	Cache     *cache.Cache[string]
 	BSI       *gateway.Hub
 }
