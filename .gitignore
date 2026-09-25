@@ -31,6 +31,7 @@ kaeman.db-*
 
 # runtime data (local config may contain secrets)
 data/
+Makefile.local
 
 # Editor/IDE
 # .idea/
