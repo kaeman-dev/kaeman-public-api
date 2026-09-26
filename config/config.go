@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -58,9 +60,6 @@ func Load(path string) (*Config, error) {
 			Database: Database{
 				DSN: "./data/kaeman.db",
 			},
-			Auth: Auth{
-				JWTSecret: "kaeman",
-			},
 			Minecraft: Minecraft{
 				MojangAPI: "https://api.mojang.com",
 			},
@@ -91,6 +90,12 @@ func Load(path string) (*Config, error) {
 	}
 
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		secret := make([]byte, 32)
+		if _, err := rand.Read(secret); err != nil {
+			return nil, fmt.Errorf("failed to generate jwt secret: %w", err)
+		}
+		loader.Default.Auth.JWTSecret = base64.RawURLEncoding.EncodeToString(secret)
+
 		if err := loader.Save(loader.Default, path); err != nil {
 			return nil, fmt.Errorf("failed to create default config file %s: %w", path, err)
 		}
