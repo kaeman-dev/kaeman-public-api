@@ -7,103 +7,82 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
-	"github.com/kaeman-dev/kaeman-public-api/model"
+	"github.com/kaeman-dev/kaeman-public-api/permission"
 	"github.com/kaeman-dev/kaeman-public-api/response"
-	"gorm.io/gorm"
+	"github.com/kaeman-dev/kaeman-public-api/server"
 )
 
-const PublicAPIKeyHeader = "Public-API-Key"
+func extractToken(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
 
-func extractToken(c *gin.Context, header string) (string, error) {
-	value := strings.TrimSpace(c.Request.Header.Get(header))
-	if header == "Authorization" {
-		fields := strings.Fields(value)
-		if len(fields) != 2 || !strings.EqualFold(fields[0], "bearer") {
-			return "", response.NewError(http.StatusUnauthorized, "Bearer JWT required")
+	fields := strings.Fields(value)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "bearer") {
+		return value
+	}
+	value = fields[1]
+
+	return value
+}
+
+func PublicAPIKey(deps *server.Services, optional bool, pms permission.Permission) func(c *gin.Context) error {
+	return func(ctx *gin.Context) error {
+		value := extractToken(ctx.GetHeader("Authorization"))
+		if value == "" {
+			if optional {
+				return nil
+			}
+			return response.New("Key required").WithStatus(http.StatusUnauthorized).Write(ctx)
 		}
-		value = fields[1]
-	}
-	if value == "" {
-		return "", response.NewError(http.StatusUnauthorized, header+" header required")
-	}
-	return value, nil
-}
-
-func VerifyPublicAPIKey(c *gin.Context, db *gorm.DB, tokens *jwt.Tokens, header string, permission model.Permission, matchUUID string) (*jwt.Claims, error) {
-	value, err := extractToken(c, header)
-	if err != nil {
-		return nil, err
-	}
-	claims, err := tokens.Parse(value, "public-api")
-	if err != nil {
-		return nil, response.NewError(http.StatusUnauthorized, "Invalid public JWT")
-	}
-	var record model.PublicToken
-	err = db.WithContext(c.Request.Context()).First(&record, "id = ?", claims.ID).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, response.NewError(http.StatusServiceUnavailable, "Token registry unavailable")
-	}
-	if err != nil || record.Revoked {
-		return nil, response.NewError(http.StatusUnauthorized, "Unknown or revoked token")
-	}
-	if permission != 0 && *claims.Data.Permissions&permission != permission {
-		return nil, response.NewError(http.StatusForbidden, "Required permission missing")
-	}
-	if matchUUID != "" && claims.Data.Minecraft.UUID != matchUUID {
-		return nil, response.NewError(http.StatusForbidden, "Minecraft UUID mismatch")
-	}
-	return claims, nil
-}
-
-func PublicAPIKey(db *gorm.DB, tokens *jwt.Tokens, permission model.Permission) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		claims, err := VerifyPublicAPIKey(c, db, tokens, "Authorization", permission, "")
+		claims, err := deps.Tokens.ParsePublicAPI(value)
 		if err != nil {
-			_ = c.Error(err)
-			c.Abort()
-			return
+			if optional {
+				return nil
+			}
+			return response.New("Invalid public api key").WithStatus(http.StatusUnauthorized).Write(ctx)
 		}
-		c.Set("publicJWT", claims)
-		c.Next()
+		if pms != 0 && *claims.Data.Permissions&pms != pms {
+			return response.New("Required permission missing").WithStatus(http.StatusUnauthorized).Write(ctx)
+		}
+		ctx.Set("publicAPIKey", claims)
+		return nil
 	}
 }
 
-func OptionalPublicAPIKey(db *gorm.DB, tokens *jwt.Tokens, header string, permission model.Permission, matchPlayer bool) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if strings.TrimSpace(c.GetHeader(header)) == "" {
-			c.Next()
-			return
+func MinecraftToken(deps *server.Services, optional bool) func(c *gin.Context) error {
+	return func(ctx *gin.Context) error {
+		value := extractToken(ctx.GetHeader("Authorization"))
+		if value == "" {
+			if optional {
+				return nil
+			}
+			return response.New("Key required").WithStatus(http.StatusUnauthorized).Write(ctx)
 		}
-		matchUUID := ""
-		if matchPlayer {
-			matchUUID = c.MustGet("minecraftJWT").(*jwt.Claims).Data.Minecraft.UUID
-		}
-		claims, err := VerifyPublicAPIKey(c, db, tokens, header, permission, matchUUID)
+		claims, err := deps.Tokens.ParseMinecraft(value)
 		if err != nil {
-			_ = c.Error(err)
-			c.Abort()
-			return
+			if optional {
+				return nil
+			}
+			return response.New("Invalid minecraft key").WithStatus(http.StatusUnauthorized).Write(ctx)
 		}
-		c.Set("publicJWT", claims)
-		c.Next()
-	}
-}
 
-func MinecraftToken(tokens *jwt.Tokens) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		value, err := extractToken(c, "Authorization")
-		if err != nil {
-			_ = c.Error(err)
-			c.Abort()
-			return
+		if publicAPIKey, ok := ctx.Get("publicAPIKey"); ok {
+			pub, ok := publicAPIKey.(*jwt.Claims[jwt.PublicAPIClaimsData])
+			if !ok {
+				return errors.New("unexpected publicAPIKey claims type")
+			}
+			allowed := false
+			for _, mc := range pub.Data.Minecrafts {
+				if mc.UUID == claims.Data.Minecraft.UUID {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return response.New("Minecraft identity not permitted by public api key").WithStatus(http.StatusUnauthorized).Write(ctx)
+			}
 		}
-		claims, err := tokens.Parse(value, "minecraft-session")
-		if err != nil {
-			_ = c.Error(response.NewError(http.StatusUnauthorized, "Invalid Minecraft JWT"))
-			c.Abort()
-			return
-		}
-		c.Set("minecraftJWT", claims)
-		c.Next()
+
+		ctx.Set("minecraftKey", claims)
+		return nil
 	}
 }

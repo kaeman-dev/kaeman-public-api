@@ -3,6 +3,7 @@ package middleware
 import (
 	"encoding/json"
 	"math"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -27,15 +28,20 @@ type ratelimitState struct {
 
 var ratelimitMu sync.Mutex
 
-func RateLimit(cache *cache.Cache[string]) gin.HandlerFunc {
-	return func(c *gin.Context) {
+func RateLimit(cache *cache.Cache[string]) func(c *gin.Context) error {
+	return func(c *gin.Context) error {
 		count := DefaultRatelimit
 		key := ratelimitKeyPrefix + c.FullPath() + ":ip:" + c.ClientIP()
-		if value, ok := c.Get("publicJWT"); ok {
-			claims := value.(*jwt.Claims)
-			key = ratelimitKeyPrefix + c.FullPath() + ":key:" + claims.ID + ":" + c.ClientIP()
-			if claims.Data.Ratelimit != nil && *claims.Data.Ratelimit > 0 {
-				count = *claims.Data.Ratelimit
+		if value, ok := c.Get("publicAPIKey"); ok {
+			if claims, ok := value.(*jwt.Claims[jwt.PublicAPIClaimsData]); ok {
+				key = ratelimitKeyPrefix + c.FullPath() + ":key:" + claims.ID + ":" + c.ClientIP()
+				if claims.Data.Ratelimit != nil && *claims.Data.Ratelimit > 0 {
+					count = *claims.Data.Ratelimit
+				}
+			}
+		} else if value, ok := c.Get("minecraftKey"); ok {
+			if claims, ok := value.(*jwt.Claims[jwt.MinecraftClaimsData]); ok {
+				key = ratelimitKeyPrefix + c.FullPath() + ":key:" + claims.ID + ":" + c.ClientIP()
 			}
 		}
 		burst := float64(count)
@@ -71,10 +77,8 @@ func RateLimit(cache *cache.Cache[string]) gin.HandlerFunc {
 		ratelimitMu.Unlock()
 		if retry > 0 {
 			c.Header("Retry-After", strconv.Itoa(retry))
-			_ = c.Error(response.NewError(429, "Too many requests"))
-			c.Abort()
-			return
+			return response.Status(http.StatusTooManyRequests).Write(c)
 		}
-		c.Next()
+		return nil
 	}
 }

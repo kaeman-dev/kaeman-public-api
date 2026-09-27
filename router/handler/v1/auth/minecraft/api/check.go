@@ -7,7 +7,7 @@ import (
 )
 
 func Check(c *gin.Context) error {
-	claims := c.MustGet("publicAPIKey").(*jwt.Claims[jwt.PublicAPIClaimsData])
+	claims := c.MustGet("minecraftKey").(*jwt.Claims[jwt.MinecraftClaimsData])
 	return response.NewData("ok",
-		gin.H{"minecrafts": claims.Data.Minecrafts, "permissions": *claims.Data.Permissions, "expiresAt": claims.ExpiresAt.Time}).Write(c)
+		gin.H{"minecraft": claims.Data.Minecraft, "expiresAt": claims.ExpiresAt.Time}).Write(c)
 }

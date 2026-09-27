@@ -1,18 +1,17 @@
 package api
 
 import (
-	"net/http"
 	"time"
 
 	"github.com/eko/gocache/lib/v4/store"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/kaeman-dev/kaeman-public-api/response"
+	"github.com/kaeman-dev/kaeman-public-api/utils"
 )
 
 const (
+	challengeTTL       = 5 * time.Minute
 	challengeKeyPrefix = "kaeman:challenge:"
-	challengeTTL       = 2 * time.Minute
 )
 
 type Challenge struct {
@@ -21,15 +20,15 @@ type Challenge struct {
 }
 
 func (h Handler) Challenge(c *gin.Context) error {
-	serverID := uuid.NewString()
+	serverID := utils.NewUUID()
 
 	if err := h.Services.Cache.Set(c.Request.Context(), challengeKeyPrefix+serverID, "", store.WithExpiration(challengeTTL)); err != nil {
-		return response.NewError(http.StatusServiceUnavailable, "Cannot save challenge")
+		return err
 	}
 
 	c.Header("Cache-Control", "no-store")
 
-	return response.NewData("ok", Challenge{
+	return response.NewData("take your challenge❤", Challenge{
 		ServerID:  serverID,
 		ExpiresAt: time.Now().UTC().Add(challengeTTL),
 	}).Write(c)

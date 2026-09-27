@@ -8,86 +8,87 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strings"
-	"time"
 
-	"github.com/kaeman-dev/kaeman-public-api/model"
+	"github.com/kaeman-dev/kaeman-public-api/jwt"
+	"github.com/kaeman-dev/kaeman-public-api/utils"
 )
 
 type Client struct {
-	HTTP *http.Client
+	hc *http.Client
 
-	baseURL string
+	sessionBaseURL string
 }
 
-func New(baseURL string) *Client {
-	return &Client{HTTP: &http.Client{Timeout: 10 * time.Second}, baseURL: strings.TrimRight(baseURL, "/")}
+// New hc 不能为空, 不然panic
+func New(baseURL string, hc *http.Client) *Client {
+	return &Client{hc, baseURL}
 }
 
-func (m *Client) Profile(ctx context.Context, id string) (model.MinecraftIdentity, error) {
-	var identity model.MinecraftIdentity
-	if !model.ValidMinecraftUUID(id) {
-		return identity, errors.New("invalid Minecraft UUID")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.baseURL+"/session/minecraft/profile/"+id, nil)
+func (m *Client) Profile(ctx context.Context, id string) (*jwt.MinecraftIdentity, error) {
+
+	id, err := utils.NormalizeUUID(id)
 	if err != nil {
-		return identity, err
+		return nil, err
 	}
-	resp, err := m.HTTP.Do(req)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.sessionBaseURL+"/session/minecraft/profile/"+id, nil)
 	if err != nil {
-		return identity, err
+		return nil, err
+	}
+
+	resp, err := m.hc.Do(req)
+	if err != nil {
+		return nil, err
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
-		return identity, fmt.Errorf("Mojang profile HTTP status: %d", resp.StatusCode)
+		return nil, fmt.Errorf("Mojang profile HTTP status: %d (uuid %s)", resp.StatusCode, id)
 	}
+
 	var profile struct {
 		ID   string `json:"id"`
 		Name string `json:"name"`
 	}
+
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&profile); err != nil {
-		return identity, err
+		return nil, err
 	}
-	if !strings.EqualFold(profile.ID, id) || !model.ValidMinecraftName(profile.Name) {
-		return identity, errors.New("invalid Mojang profile identity")
-	}
-	return model.MinecraftIdentity{UUID: id, Name: profile.Name}, nil
+
+	return &jwt.MinecraftIdentity{
+		UUID: id,
+		Name: profile.Name,
+	}, nil
 }
 
-func (m *Client) HasJoined(ctx context.Context, username, serverID, uuid string) (bool, error) {
-	u, err := url.Parse(m.baseURL + "/session/minecraft/hasJoined")
+var ErrNotJoined = errors.New("player has not joined the server")
+
+// HasJoined err 是 nil 就是已经进入了的
+func (m *Client) HasJoined(ctx context.Context, username, serverID string) error {
+	u, err := url.Parse(m.sessionBaseURL + "/session/minecraft/hasJoined")
 	if err != nil {
-		return false, fmt.Errorf("invalid session URL: %w", err)
+		return fmt.Errorf("invalid session URL: %w", err)
 	}
 	query := u.Query()
 	query.Set("username", username)
 	query.Set("serverId", serverID)
 	u.RawQuery = query.Encode()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return false, err
+		return err
 	}
-	resp, err := m.HTTP.Do(req)
+	resp, err := m.hc.Do(req)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer resp.Body.Close()
+
 	switch resp.StatusCode {
 	case http.StatusOK:
-	case http.StatusNoContent, http.StatusForbidden, http.StatusNotFound:
-		return false, nil
+		return nil
+	case http.StatusNoContent:
+		return ErrNotJoined
 	default:
-		return false, fmt.Errorf("Mojang hasJoined HTTP status: %d", resp.StatusCode)
+		return fmt.Errorf("Mojang hasJoined HTTP status: %d (username %s)", resp.StatusCode, username)
 	}
-	var profile struct {
-		ID   string `json:"id"`
-		Name string `json:"name"`
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&profile); err != nil {
-		return false, fmt.Errorf("invalid Mojang response: %w", err)
-	}
-	if !model.ValidMinecraftName(profile.Name) || !strings.EqualFold(profile.ID, uuid) || !strings.EqualFold(profile.Name, username) {
-		return false, nil
-	}
-	return true, nil
 }

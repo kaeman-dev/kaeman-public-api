@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +18,7 @@ import (
 	"github.com/kaeman-dev/kaeman-public-api/config"
 	"github.com/kaeman-dev/kaeman-public-api/gateway"
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
+	"github.com/kaeman-dev/kaeman-public-api/logging"
 	"github.com/kaeman-dev/kaeman-public-api/minecraft"
 	"github.com/kaeman-dev/kaeman-public-api/router"
 	"github.com/kaeman-dev/kaeman-public-api/server"
@@ -41,11 +42,15 @@ func main() {
 		},
 	})
 
+	logging.RedirectGIN(log.Logger)
+	slog.SetDefault(log.Logger)
+
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Error("load config", "error", err)
 		os.Exit(1)
 	}
+
 	db, err := storage.Open(cfg.Database.DSN, log.Logger)
 	if err != nil {
 		log.Error("initialize database", "error", err)
@@ -54,7 +59,13 @@ func main() {
 	sqlDB, _ := db.DB()
 	defer sqlDB.Close()
 
-	deps := &server.Services{DB: db, Log: log.Logger, Tokens: &jwt.Tokens{Secret: []byte(cfg.Auth.JWTSecret)}, Minecraft: minecraft.New(cfg.Minecraft.MojangAPI), BSI: &gateway.Hub{}}
+	deps := &server.Services{
+		DB:        db,
+		Log:       log.Logger,
+		Tokens:    &jwt.Token{Secret: []byte(cfg.Auth.JWTSecret)},
+		Minecraft: minecraft.New(cfg.Minecraft.MojangSessionBaseURL, http.DefaultClient),
+		BSI:       &gateway.Hub{},
+	}
 
 	if cfg.Redis.Addr != "" {
 		network := "tcp"
@@ -74,29 +85,32 @@ func main() {
 	}
 
 	httpServer := &http.Server{Addr: cfg.Server.ListenAddr, Handler: router.NewRouter(deps), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	serverError := make(chan error, 1)
-	go func() { serverError <- httpServer.ListenAndServe() }()
+
+	err = httpServer.ListenAndServe()
+	if err != nil {
+		log.Error("serve HTTP", "error", err)
+		os.Exit(1)
+	}
+
 	log.Info("server listening", "address", cfg.Server.ListenAddr)
-	failed := false
+
 	select {
 	case <-ctx.Done():
-	case err := <-serverError:
-		if !errors.Is(err, http.ErrServerClosed) {
-			log.Error("serve HTTP", "error", err)
-			failed = true
-		}
+		os.Exit(0)
 	}
+
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
 	deps.BSI.Close()
 	if err := httpServer.Shutdown(shutdown); err != nil {
 		log.Error("shutdown HTTP", "error", err)
 		httpServer.Close()
 	}
-	if failed {
-		sqlDB.Close()
-		os.Exit(1)
-	}
+
+	sqlDB.Close()
+	os.Exit(1)
 }

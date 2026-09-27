@@ -13,7 +13,7 @@ import (
 type Services struct {
 	DB        *gorm.DB
 	Log       *slog.Logger
-	Tokens    *jwt.Tokens
+	Tokens    *jwt.Token
 	Minecraft *minecraft.Client
 	Cache     *cache.Cache[string]
 	BSI       *gateway.Hub

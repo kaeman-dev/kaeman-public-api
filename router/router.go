@@ -17,15 +17,16 @@ func NewRouter(deps *server.Services) *gin.Engine {
 	_ = e.SetTrustedProxies(nil)
 
 	e.RedirectTrailingSlash = false
-	e.HandleMethodNotAllowed = true
 	e.NoRoute(func(c *gin.Context) {
-		_ = c.Error(response.NewError(http.StatusNotFound, "not found"))
+		response.New(http.StatusText(http.StatusNotFound)).WithStatus(http.StatusNotFound).Write(c)
 	})
+
+	e.HandleMethodNotAllowed = true
 	e.NoMethod(func(c *gin.Context) {
-		_ = c.Error(response.NewError(http.StatusMethodNotAllowed, "method not allowed"))
+		response.New(http.StatusText(http.StatusMethodNotAllowed)).WithStatus(http.StatusMethodNotAllowed).Write(c)
 	})
 
 	v1.Register(e.Group("/v1"), deps)
-	e.GET("/ws/bsi", deps.BSI.Listen)
+
 	return e
 }

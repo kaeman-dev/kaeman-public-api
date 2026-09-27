@@ -1,10 +1,11 @@
+//go:generate stringer -flags "Permission=lineComment" -output=string.go
 package permission
 
 type Permission uint64
 
 const (
-	Developer Permission = 1 << iota
-	Default
+	BaseDeveloper Permission = 1 << iota // base:developer
+	BaseDefault                          // base:default
 
-	Splasher
+	SplasherQueue // splasher:queue
 )

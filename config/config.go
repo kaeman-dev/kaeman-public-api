@@ -43,7 +43,7 @@ type Auth struct {
 }
 
 type Minecraft struct {
-	MojangAPI string `toml:"mojang_api"`
+	MojangSessionBaseURL string `toml:"mojang_session_base_url"`
 }
 
 func Load(path string) (*Config, error) {
@@ -61,10 +61,11 @@ func Load(path string) (*Config, error) {
 				DSN: "./data/kaeman.db",
 			},
 			Minecraft: Minecraft{
-				MojangAPI: "https://api.mojang.com",
+				MojangSessionBaseURL: "https://sessionserver.mojang.com",
 			},
 		},
 		Validate: func(cfg *Config) error {
+
 			var errs error
 
 			errs = errors.Join(errs, cfg.Validate())
@@ -76,12 +77,14 @@ func Load(path string) (*Config, error) {
 					}
 				}
 			}
+
 			if len(cfg.Auth.JWTSecret) > 0 && len(cfg.Auth.JWTSecret) < 32 {
 				errs = errors.Join(errs, errors.New("auth.secret must contain at least 32 bytes"))
 			}
-			if cfg.Minecraft.MojangAPI != "" {
-				if u, err := url.Parse(cfg.Minecraft.MojangAPI); err != nil || u.Scheme == "" || u.Host == "" {
-					errs = errors.Join(errs, fmt.Errorf("minecraft.mojang_api must be a valid URL: %q", cfg.Minecraft.MojangAPI))
+			if cfg.Minecraft.MojangSessionBaseURL != "" {
+				cfg.Minecraft.MojangSessionBaseURL = strings.TrimRight(cfg.Minecraft.MojangSessionBaseURL, "/")
+				if u, err := url.Parse(cfg.Minecraft.MojangSessionBaseURL); err != nil || u.Scheme == "" || u.Host == "" {
+					errs = errors.Join(errs, fmt.Errorf("minecraft.mojang_session_base_url must be a valid URL: %q", cfg.Minecraft.MojangSessionBaseURL))
 				}
 			}
 

@@ -9,6 +9,6 @@ import (
 
 func Register(rg *gin.RouterGroup, deps *server.Services) {
 	h := api.Handler{Services: deps}
-	rg.POST("/challenge", middleware.RateLimit(deps.Cache), middleware.Wrap(h.Challenge))
-	rg.POST("/verify", middleware.RateLimit(deps.Cache), middleware.Wrap(h.Verify))
+	rg.GET("/challenge", middleware.Chain(h.Challenge, middleware.RateLimit(deps.Cache)))
+	rg.POST("/verify", middleware.Chain(h.Verify, middleware.RateLimit(deps.Cache)))
 }

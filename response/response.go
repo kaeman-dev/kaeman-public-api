@@ -22,20 +22,22 @@ func New(msg string) Response[any] {
 	}
 }
 
+func Status(status int) Response[any] {
+	return Response[any]{
+		status: status,
+		Msg:    http.StatusText(status),
+	}
+}
+
 func NewData[T any](msg string, data T) Response[T] {
 	return Response[T]{
 		Msg:  msg,
 		Data: data,
 	}
 }
-
 func (r Response[T]) WithStatus(status int) Response[T] {
 	r.status = status
 	return r
-}
-
-func (r Response[T]) Error() string {
-	return r.Msg
 }
 
 func (r Response[T]) Write(c *gin.Context) error {

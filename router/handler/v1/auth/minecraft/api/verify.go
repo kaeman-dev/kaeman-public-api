@@ -7,58 +7,65 @@ import (
 
 	"github.com/eko/gocache/lib/v4/store"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"github.com/kaeman-dev/kaeman-public-api/model"
+	"github.com/kaeman-dev/kaeman-public-api/minecraft"
 	"github.com/kaeman-dev/kaeman-public-api/response"
+	"github.com/kaeman-dev/kaeman-public-api/utils"
 )
 
+type VerifyInput struct {
+	ServerID string `json:"serverID"`
+	UUID     string `json:"uuid"`
+}
+
+const sessionTTL = 24 * time.Hour
+
 func (h Handler) Verify(c *gin.Context) error {
-	var input struct {
-		ServerID string `json:"serverID"`
-		UUID     string `json:"uuid"`
-	}
+	input := VerifyInput{}
 
 	if err := response.Decode(c, &input); err != nil {
-		return response.NewError(http.StatusBadRequest, err.Error())
+		return response.New("Invalid request body").WithStatus(http.StatusBadRequest).Write(c)
 	}
-	if _, err := uuid.Parse(input.ServerID); err != nil {
-		return response.NewError(http.StatusBadRequest, "Invalid serverID")
+	serverID, err := utils.NormalizeUUID(input.ServerID)
+	if err != nil {
+		return response.New("Invalid serverID").WithStatus(http.StatusBadRequest).Write(c)
 	}
-	if !model.ValidMinecraftUUID(input.UUID) {
-		return response.NewError(http.StatusBadRequest, "Invalid UUID")
+	id, err := utils.NormalizeUUID(input.UUID)
+	if err != nil {
+		return response.New("Invalid UUID").WithStatus(http.StatusBadRequest).Write(c)
 	}
-	_, err := h.Services.Cache.Get(c.Request.Context(), challengeKeyPrefix+input.ServerID)
+
+	_, err = h.Services.Cache.Get(c.Request.Context(), challengeKeyPrefix+serverID)
 	if errors.Is(err, store.NotFound{}) {
-		return response.NewError(http.StatusUnauthorized, "Invalid or expired challenge")
+		return response.New("Invalid or expired challenge").WithStatus(http.StatusUnauthorized).Write(c)
 	}
 	if err != nil {
-		return response.NewError(http.StatusServiceUnavailable, "Challenge store unavailable")
+		return err
 	}
-	identity, err := h.Services.Minecraft.Profile(c.Request.Context(), input.UUID)
+	identity, err := h.Services.Minecraft.Profile(c.Request.Context(), id)
 	if err != nil {
-		return response.NewError(http.StatusServiceUnavailable, "Mojang profile lookup failed")
+		return err
 	}
-	verified, err := h.Services.Minecraft.HasJoined(c.Request.Context(), identity.Name, input.ServerID, input.UUID)
+	err = h.Services.Minecraft.HasJoined(c.Request.Context(), identity.Name, input.ServerID)
+	if errors.Is(err, minecraft.ErrNotJoined) {
+		return response.New("Minecraft session verification failed").WithStatus(http.StatusUnauthorized).Write(c)
+	}
 	if err != nil {
-		return response.NewError(http.StatusServiceUnavailable, "Mojang unavailable")
+		return err
 	}
-	if !verified {
-		return response.NewError(http.StatusUnauthorized, "Minecraft session verification failed")
-	}
-	token, claims, err := h.Services.Tokens.Issue(identity, nil, nil, 24*time.Hour)
+	token, err := h.Services.Tokens.IssueMinecraft(*identity, sessionTTL)
 	if err != nil {
-		return response.NewError(http.StatusServiceUnavailable, "Cannot issue token")
+		return err
 	}
-	_, err = h.Services.Cache.Get(c.Request.Context(), challengeKeyPrefix+input.ServerID)
+	_, err = h.Services.Cache.Get(c.Request.Context(), challengeKeyPrefix+serverID)
 	if errors.Is(err, store.NotFound{}) {
-		return response.NewError(http.StatusUnauthorized, "Challenge already used or expired")
+		return response.New("Challenge already used or expired").WithStatus(http.StatusUnauthorized).Write(c)
 	}
 	if err != nil {
-		return response.NewError(http.StatusServiceUnavailable, "Challenge store unavailable")
+		return err
 	}
-	if err = h.Services.Cache.Delete(c.Request.Context(), challengeKeyPrefix+input.ServerID); err != nil {
-		return response.NewError(http.StatusServiceUnavailable, "Challenge store unavailable")
+	if err = h.Services.Cache.Delete(c.Request.Context(), challengeKeyPrefix+serverID); err != nil {
+		return err
 	}
 	c.Header("Cache-Control", "no-store")
-	return response.NewData("ok", gin.H{"accessToken": token, "expiresAt": claims.ExpiresAt.Time}).Write(c)
+	return response.NewData("ok", gin.H{"accessToken": token, "expiresAt": time.Now().UTC().Add(sessionTTL)}).Write(c)
 }

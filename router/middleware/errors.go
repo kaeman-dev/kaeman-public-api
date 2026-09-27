@@ -14,16 +14,23 @@ import (
 	"github.com/kaeman-dev/kaeman-public-api/response"
 )
 
-func Wrap(h func(c *gin.Context) error) gin.HandlerFunc {
+func Chain(h func(c *gin.Context) error, mws ...func(c *gin.Context) error) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		for _, mw := range mws {
+			err := mw(c)
+			if err == nil && !c.Writer.Written() {
+				continue
+			}
+			if err != nil {
+				_ = c.Error(err)
+			}
+			c.Abort()
+			return
+		}
 		if err := h(c); err != nil {
 			_ = c.Error(err)
 		}
 	}
-}
-
-type Error struct {
-	TraceID string `json:"traceID"`
 }
 
 func Errors(log *slog.Logger) gin.HandlerFunc {
@@ -35,7 +42,7 @@ func Errors(log *slog.Logger) gin.HandlerFunc {
 				for _, entry := range c.Errors {
 					causes = append(causes, entry.Err)
 				}
-				log.ErrorContext(c.Request.Context(), "request failed", "trace_id", requestid.Get(c), "method", c.Request.Method, "path", c.Request.URL.Path, "status", c.Writer.Status(), "error", errors.Join(causes...))
+				log.ErrorContext(c.Request.Context(), "unexpected error", "trace_id", requestid.Get(c), "method", c.Request.Method, "path", c.Request.URL.Path, "status", c.Writer.Status(), "stack", string(debug.Stack()), "error", errors.Join(causes...))
 			}
 			log.InfoContext(c.Request.Context(), "http request", "trace_id", requestid.Get(c), "method", c.Request.Method, "path", c.Request.URL.Path, "status", c.Writer.Status(), "duration", time.Since(start))
 		}()
@@ -45,12 +52,7 @@ func Errors(log *slog.Logger) gin.HandlerFunc {
 			return
 		}
 
-		var httpErr response.HTTPError
-		status, msg := http.StatusInternalServerError, "Unhandled request error"
-		if errors.As(c.Errors.Last().Err, &httpErr) {
-			status, msg = httpErr.HTTPStatus(), httpErr.Error()
-		}
-		_ = response.NewData(msg, Error{TraceID: requestid.Get(c)}).WithStatus(status).Write(c)
+		_ = response.NewData("oops, something went wrong", gin.H{"traceID": requestid.Get(c)}).WithStatus(http.StatusInternalServerError).Write(c)
 	}
 }
 

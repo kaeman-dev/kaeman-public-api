@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"github.com/kaeman-dev/kaeman-public-api/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -24,9 +23,5 @@ func Open(dsn string, log *slog.Logger) (*gorm.DB, error) {
 		return nil, err
 	}
 	connection.SetMaxOpenConns(1)
-	if err := db.AutoMigrate(&model.PublicToken{}, &model.Event{}); err != nil {
-		connection.Close()
-		return nil, err
-	}
 	return db, nil
 }
