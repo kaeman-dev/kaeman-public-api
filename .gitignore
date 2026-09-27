@@ -26,13 +26,13 @@ go.work.sum
 
 # env file
 .env
-kaeman.db
-kaeman.db-*
+
+# Editor/IDE
+.idea/
+.vscode/
 
 # runtime data (local config may contain secrets)
 data/
 Makefile.local
-
-# Editor/IDE
-# .idea/
-# .vscode/
+kaeman.db
+kaeman.db-*
