@@ -5,14 +5,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
 	"reflect"
 	"strings"
 
 	"github.com/Sn0wo2/ordo"
 	"github.com/Sn0wo2/ordo/format"
+	"github.com/go-playground/validator/v10"
 	"github.com/pelletier/go-toml/v2"
 )
 
@@ -24,13 +23,25 @@ type Config struct {
 	Minecraft Minecraft `toml:"minecraft"`
 }
 
+var validate = validator.New()
+
+func init() {
+	validate.RegisterTagNameFunc(func(field reflect.StructField) string {
+		name, _, _ := strings.Cut(field.Tag.Get("toml"), ",")
+		if name == "" {
+			name = field.Name
+		}
+		return name
+	})
+}
+
 type Server struct {
-	ListenAddr   string   `toml:"listen_addr"`
-	TrustProxies []string `toml:"trust_proxies,omitempty"`
+	ListenAddr   string   `toml:"listen_addr" validate:"required"`
+	TrustProxies []string `toml:"trust_proxies,omitempty" validate:"omitempty,dive,ip|cidr"`
 }
 
 type Database struct {
-	DSN string `toml:"dsn"`
+	DSN string `toml:"dsn" validate:"required"`
 }
 
 type Redis struct {
@@ -39,11 +50,11 @@ type Redis struct {
 }
 
 type Auth struct {
-	JWTSecret string `toml:"secret"`
+	JWTSecret string `toml:"secret" validate:"omitempty,min=32"`
 }
 
 type Minecraft struct {
-	MojangSessionBaseURL string `toml:"mojang_session_base_url"`
+	MojangSessionBaseURL string `toml:"mojang_session_base_url" validate:"omitempty,url"`
 }
 
 func Load(path string) (*Config, error) {
@@ -58,37 +69,14 @@ func Load(path string) (*Config, error) {
 				ListenAddr: ":38080",
 			},
 			Database: Database{
-				DSN: "sqlite://./data/kaeman.db",
+				DSN: "postgres://postgres:postgres@localhost/postgres",
 			},
 			Minecraft: Minecraft{
 				MojangSessionBaseURL: "https://sessionserver.mojang.com",
 			},
 		},
 		Validate: func(cfg *Config) error {
-
-			var errs error
-
-			errs = errors.Join(errs, cfg.Validate())
-
-			for _, proxy := range cfg.Server.TrustProxies {
-				if net.ParseIP(proxy) == nil {
-					if _, _, err := net.ParseCIDR(proxy); err != nil {
-						errs = errors.Join(errs, fmt.Errorf("server.trust_proxies contains invalid IP or CIDR: %q", proxy))
-					}
-				}
-			}
-
-			if len(cfg.Auth.JWTSecret) > 0 && len(cfg.Auth.JWTSecret) < 32 {
-				errs = errors.Join(errs, errors.New("auth.secret must contain at least 32 bytes"))
-			}
-			if cfg.Minecraft.MojangSessionBaseURL != "" {
-				cfg.Minecraft.MojangSessionBaseURL = strings.TrimRight(cfg.Minecraft.MojangSessionBaseURL, "/")
-				if u, err := url.Parse(cfg.Minecraft.MojangSessionBaseURL); err != nil || u.Scheme == "" || u.Host == "" {
-					errs = errors.Join(errs, fmt.Errorf("minecraft.mojang_session_base_url must be a valid URL: %q", cfg.Minecraft.MojangSessionBaseURL))
-				}
-			}
-
-			return errs
+			return cfg.Validate()
 		},
 	}
 
@@ -120,45 +108,17 @@ func (cfg *Config) Validate() error {
 
 	var errs error
 
-	var walk func(value reflect.Value, path string)
-	walk = func(value reflect.Value, path string) {
-		t := value.Type()
-		for i := range t.NumField() {
-			field := t.Field(i)
-			if !field.IsExported() {
-				continue
+	cfg.Minecraft.MojangSessionBaseURL = strings.TrimRight(cfg.Minecraft.MojangSessionBaseURL, "/")
+	if err := validate.Struct(cfg); err != nil {
+		var fieldErrs validator.ValidationErrors
+		if errors.As(err, &fieldErrs) {
+			for _, fe := range fieldErrs {
+				errs = errors.Join(errs, fmt.Errorf("%s failed on the %q validation", strings.TrimPrefix(fe.Namespace(), "Config."), fe.Tag()))
 			}
-
-			tag := field.Tag.Get("toml")
-			if tag == "-" {
-				continue
-			}
-
-			name, opts, _ := strings.Cut(tag, ",")
-			if strings.Contains(opts, "omitempty") || strings.Contains(opts, "omitzero") {
-				continue
-			}
-			if name == "" {
-				name = field.Name
-			}
-
-			child := value.Field(i)
-			childPath := name
-			if path != "" {
-				childPath = path + "." + name
-			}
-
-			if child.Kind() == reflect.Struct {
-				walk(child, childPath)
-				continue
-			}
-			if child.IsZero() {
-				errs = errors.Join(errs, fmt.Errorf("%s is required", childPath))
-			}
+		} else {
+			return err
 		}
 	}
-
-	walk(reflect.ValueOf(cfg).Elem(), "")
 
 	return errs
 }
