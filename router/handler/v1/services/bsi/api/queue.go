@@ -25,36 +25,62 @@ type BSIPayload interface {
 }
 
 type BSIChatRequest struct {
-	Content string `json:"content"`
+	// Content 消息内容，不能为空白
+	Content string `json:"content" binding:"required" example:"Hello kaeman!"`
 }
 
 // 可以复用
 type BSIChatResponse BSIChatRequest
 
 type BSISplashRequest struct {
-	Splasher string    `json:"splasher"`
-	Time     time.Time `json:"time"`
-	Lobby    string    `json:"lobby"`
-	LobbyID  int64     `json:"lobbyID"`
-	Location string    `json:"location,omitempty"`
-	ServerID string    `json:"serverID,omitempty"`
-	Note     string    `json:"note,omitempty"`
+	// Splasher 发起 splash 的玩家名
+	Splasher string `json:"splasher" example:"Notch"`
+	// Time splash 时间，必填
+	Time time.Time `json:"time" binding:"required" example:"2026-09-29T12:00:00Z"`
+	// Lobby 大厅名称，必填
+	Lobby string `json:"lobby" binding:"required" example:"lobby-1"`
+	// LobbyID 大厅编号，从 1 开始，必填
+	LobbyID int64 `json:"lobbyID" binding:"required" example:"1"`
+	// Location splash 坐标位置
+	Location string `json:"location,omitempty" example:"256 64 -128"`
+	// ServerID splash 所在服务器 ID
+	ServerID string `json:"serverID,omitempty" example:"lobby"`
+	// Note 附加备注
+	Note string `json:"note,omitempty" example:"every 10 mins"`
 }
 
 // 可以复用
 type BSISplashResponse BSISplashRequest
 
 type BSIMessage[T BSIPayload] struct {
-	ID   string  `json:"id,omitempty"`
+	// ID 消息 ID，服务端签发的小写无横杠 UUID
+	ID string `json:"id,omitempty" example:"0f8f8c8e5d3c4b2a9e7d6c5b4a3f2e1d"`
+	// Type 消息类型
 	Type BSIType `json:"type"`
-	Data T       `json:"data"`
+	// Data 消息体
+	Data T `json:"data"`
 }
 
 type BSIEnvelope struct {
-	Type BSIType         `json:"type"`
-	Data json.RawMessage `json:"data"`
+	// Type 消息类型，chat 或 splash
+	Type BSIType `json:"type" binding:"required"`
+	// Data 消息体，type 为 chat 时为 BSIChatRequest，为 splash 时为 BSISplashRequest
+	Data json.RawMessage `json:"data" example:"{\"content\":\"Hello kaeman!\"}"`
 }
 
+// Send godoc
+// @Summary 向 BSI 广播一条消息
+// @Description 需要 splasher:queue 权限的 public api key，且 Authorization 中的 JWT 需同时携带 public API 与 Minecraft 会话 claims（audience 含 public-api 和 minecraft-session，data 同时包含 uid/permissions/ratelimit 与 minecraft）。消息经校验后分配无横杠 UUID 作为 id，实时广播给所有 /gateway WebSocket 订阅者。成功返回 202，data 为 null。
+// @Tags services
+// @Accept json
+// @Security BearerAuth
+// @Param body body BSIEnvelope true "type 为 chat 时 data 为 BSIChatRequest，type 为 splash 时 data 为 BSISplashRequest"
+// @Success 202 {object} response.Response[any]
+// @Failure 400 {object} response.Response[any] "Invalid request body / Message must not be blank / Valid time, lobby and lobbyID are required / Unknown message kind"
+// @Failure 401 {object} response.Response[any] "Key required / Invalid public api key / Required permission missing / Invalid minecraft key / Minecraft identity not bound to this public api key"
+// @Failure 429 {object} response.Response[any] "Too Many Requests"
+// @Failure 500 {object} response.Response[any]
+// @Router /v1/services/bsi/queue [post]
 func (h Handler) Send(c *gin.Context) error {
 	var env BSIEnvelope
 	if err := response.Decode(c, &env); err != nil {

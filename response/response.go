@@ -12,8 +12,10 @@ import (
 type Response[T any] struct {
 	status int
 
-	Msg  string `json:"msg"`
-	Data T      `json:"data,omitempty"`
+	// Msg 响应消息，通用消息为 HTTP 状态文本，业务消息为具体语义
+	Msg string `json:"msg"`
+	// Data 响应数据，失败或无数据时省略
+	Data T `json:"data,omitempty"`
 }
 
 func New(msg string) Response[any] {

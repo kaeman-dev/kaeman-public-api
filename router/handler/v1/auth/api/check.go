@@ -2,17 +2,38 @@ package api
 
 import (
 	"net/http"
+	"time"
+
+	"uuid"
 
 	"github.com/gin-gonic/gin"
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
+	"github.com/kaeman-dev/kaeman-public-api/permission"
 	"github.com/kaeman-dev/kaeman-public-api/response"
 	"github.com/kaeman-dev/kaeman-public-api/server"
 	"github.com/kaeman-dev/kaeman-public-api/storage"
-	"uuid"
 )
 
 type Handler struct{ Services *server.Services }
 
+type CheckData struct {
+	// Minecrafts public api key 归属人绑定的全部 Minecraft 身份，小写无横杠 UUID
+	Minecrafts []string `json:"minecrafts" example:"069a79f444e94726a5befca90e38aaf5"`
+	// Permissions public api key 的权限位集合，按位与判断
+	Permissions permission.Permission `json:"permissions" example:"4"`
+	// ExpiresAt public api key 过期时间
+	ExpiresAt time.Time `json:"expiresAt" example:"2026-09-30T12:00:00Z"`
+}
+
+// Check godoc
+// @Summary 查询 public api key 归属人绑定的 Minecraft 身份
+// @Tags auth
+// @Security BearerAuth
+// @Success 200 {object} response.Response[api.CheckData]
+// @Failure 401 {object} response.Response[any] "Key required / Invalid public api key"
+// @Failure 429 {object} response.Response[any] "Too Many Requests"
+// @Failure 500 {object} response.Response[any]
+// @Router /v1/auth/check [get]
 func (h Handler) Check(c *gin.Context) error {
 	claims := c.MustGet("publicAPIKey").(*jwt.Claims[jwt.PublicAPIClaimsData])
 	uid, err := uuid.Parse(claims.Data.UID)
@@ -29,6 +50,9 @@ func (h Handler) Check(c *gin.Context) error {
 			minecrafts = append(minecrafts, identity.Identity)
 		}
 	}
-	return response.NewData("ok",
-		gin.H{"minecrafts": minecrafts, "permissions": *claims.Data.Permissions, "expiresAt": claims.ExpiresAt.Time}).Write(c)
+	return response.NewData("ok", CheckData{
+		Minecrafts:  minecrafts,
+		Permissions: *claims.Data.Permissions,
+		ExpiresAt:   claims.ExpiresAt.Time,
+	}).Write(c)
 }

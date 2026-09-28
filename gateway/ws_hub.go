@@ -27,6 +27,13 @@ type connection struct {
 	kicked atomic.Bool
 }
 
+// Listen godoc
+// @Summary BSI 实时消息 WebSocket 网关
+// @Description 建立 WebSocket 连接后作为只读订阅者接收服务端推送的 BSIMessage 文本帧（JSON）：type 为 chat 时 data 为 BSIChatResponse，type 为 splash 时 data 为 BSISplashResponse。客户端发送会被 CloseRead 忽略，服务端每 30 秒 ping 一次，空闲写超时 5 秒。OpenAPI 不支持 WebSocket，仅作说明用。
+// @Tags services
+// @Success 101 {string} string "Switching Protocols (WebSocket upgrade)"
+// @Failure 503 {object} response.Response[any] "Service Unavailable（hub 已关闭）"
+// @Router /v1/services/bsi/gateway [get]
 func (h *Hub) Listen(c *gin.Context) {
 	if h.closed.Load() {
 		_ = response.New(http.StatusText(http.StatusServiceUnavailable)).WithStatus(http.StatusServiceUnavailable).Write(c)

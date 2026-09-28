@@ -13,12 +13,34 @@ import (
 )
 
 type VerifyInput struct {
-	ServerID string `json:"serverID"`
-	UUID     string `json:"uuid"`
+	// ServerID challenge 返回的一次性挑战 ID，有/无横杠均可
+	ServerID string `json:"serverID" binding:"required" example:"0f8f8c8e5d3c4b2a9e7d6c5b4a3f2e1d"`
+	// UUID 玩家 Mojang UUID，有/无横杠均可
+	UUID string `json:"uuid" binding:"required" example:"069a79f444e94726a5befca90e38aaf5"`
+}
+
+type VerifyData struct {
+	// AccessToken Minecraft 会话 JWT，audience 为 minecraft-session，24 小时有效
+	AccessToken string `json:"accessToken" example:"eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOlsibWluZWNyYWZ0LXNlc3Npb24iXSwiZGF0YSI6eyJtaW5lY3JhZnQiOnsibmFtZSI6Ik5vdGNoIiwidXVpZCI6IjA2OWE3OWY0NDRlOTQ3MjZhNWJlZmNhOTBlMzhhYWY1In19fQ.x"`
+	// ExpiresAt 会话 token 过期时间
+	ExpiresAt time.Time `json:"expiresAt" example:"2026-09-30T12:00:00Z"`
 }
 
 const sessionTTL = 24 * time.Hour
 
+// Verify godoc
+// @Summary 验证 Minecraft 会话并换取会话 token
+// @Description 用 challenge 返回的 serverID 和玩家 UUID 调用，服务端校验玩家已在 Mojang 会话服务器 join 该 serverID。验证成功后签发 24 小时有效的 Minecraft 会话 JWT，并立即消费掉挑战。
+// @Tags auth
+// @Accept json
+// @Param body body VerifyInput true "挑战与玩家 UUID，均支持带/不带横杠"
+// @Success 200 {object} response.Response[api.VerifyData]
+// @Header 200 {string} Cache-Control "no-store"
+// @Failure 400 {object} response.Response[any] "Invalid request body / Invalid serverID / Invalid UUID"
+// @Failure 401 {object} response.Response[any] "Invalid or expired challenge / Minecraft session verification failed / Challenge already used or expired"
+// @Failure 429 {object} response.Response[any] "Too Many Requests"
+// @Failure 500 {object} response.Response[any]
+// @Router /v1/auth/minecraft/verify [post]
 func (h Handler) Verify(c *gin.Context) error {
 	input := VerifyInput{}
 
@@ -67,5 +89,5 @@ func (h Handler) Verify(c *gin.Context) error {
 		return err
 	}
 	c.Header("Cache-Control", "no-store")
-	return response.NewData("ok", gin.H{"accessToken": token, "expiresAt": time.Now().UTC().Add(sessionTTL)}).Write(c)
+	return response.NewData("ok", VerifyData{AccessToken: token, ExpiresAt: time.Now().UTC().Add(sessionTTL)}).Write(c)
 }

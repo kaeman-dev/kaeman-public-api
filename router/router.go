@@ -8,6 +8,8 @@ import (
 	v1 "github.com/kaeman-dev/kaeman-public-api/router/handler/v1"
 	"github.com/kaeman-dev/kaeman-public-api/router/middleware"
 	"github.com/kaeman-dev/kaeman-public-api/server"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 func NewRouter(deps *server.Services) *gin.Engine {
@@ -25,6 +27,10 @@ func NewRouter(deps *server.Services) *gin.Engine {
 	e.NoMethod(func(c *gin.Context) {
 		response.New(http.StatusText(http.StatusMethodNotAllowed)).WithStatus(http.StatusMethodNotAllowed).Write(c)
 	})
+
+	if gin.Mode() == gin.DebugMode {
+		e.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	}
 
 	v1.Register(e.Group("/v1"), deps)
 
