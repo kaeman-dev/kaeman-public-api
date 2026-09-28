@@ -17,15 +17,12 @@ import (
 )
 
 func extractToken(value string) string {
-	value = strings.TrimSpace(strings.ToLower(value))
-
+	value = strings.TrimSpace(value)
 	fields := strings.Fields(value)
 	if len(fields) != 2 || !strings.EqualFold(fields[0], "bearer") {
 		return value
 	}
-	value = fields[1]
-
-	return value
+	return fields[1]
 }
 
 func PublicAPIKey(deps *server.Services, optional bool, pms permission.Permission) func(c *gin.Context) error {
