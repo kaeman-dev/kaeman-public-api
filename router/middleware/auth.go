@@ -5,11 +5,15 @@ import (
 	"net/http"
 	"strings"
 
+	"uuid"
+
 	"github.com/gin-gonic/gin"
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
 	"github.com/kaeman-dev/kaeman-public-api/permission"
 	"github.com/kaeman-dev/kaeman-public-api/response"
 	"github.com/kaeman-dev/kaeman-public-api/server"
+	"github.com/kaeman-dev/kaeman-public-api/storage"
+	"gorm.io/gorm"
 )
 
 func extractToken(value string) string {
@@ -70,15 +74,16 @@ func MinecraftToken(deps *server.Services, optional bool) func(c *gin.Context) e
 			if !ok {
 				return errors.New("unexpected publicAPIKey claims type")
 			}
-			allowed := false
-			for _, mc := range pub.Data.Minecrafts {
-				if mc.UUID == claims.Data.Minecraft.UUID {
-					allowed = true
-					break
-				}
+			ownerUID, err := uuid.Parse(pub.Data.UID)
+			if err != nil {
+				return response.New("Invalid public api key").WithStatus(http.StatusUnauthorized).Write(ctx)
 			}
-			if !allowed {
-				return response.New("Minecraft identity not permitted by public api key").WithStatus(http.StatusUnauthorized).Write(ctx)
+			bound, err := storage.GetIdentity(ctx.Request.Context(), deps.DB, storage.PlatformMinecraft, claims.Data.Minecraft.UUID)
+			if errors.Is(err, gorm.ErrRecordNotFound) || (err == nil && bound.UID != ownerUID) {
+				return response.New("Minecraft identity not bound to this public api key").WithStatus(http.StatusUnauthorized).Write(ctx)
+			}
+			if err != nil {
+				return err
 			}
 		}
 

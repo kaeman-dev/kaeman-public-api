@@ -16,9 +16,9 @@ type Claims[T PublicAPIClaimsData | MinecraftClaimsData] struct {
 }
 
 type PublicAPIClaimsData struct {
+	UID         string                 `json:"uid"`
 	Permissions *permission.Permission `json:"permissions,omitempty"`
 	Ratelimit   *int                   `json:"ratelimit,omitempty"`
-	Minecrafts  []MinecraftIdentity    `json:"minecrafts,omitempty"`
 }
 
 type MinecraftClaimsData struct {
