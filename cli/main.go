@@ -99,28 +99,24 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	err = httpServer.ListenAndServe()
-	if err != nil {
-		log.Error("serve HTTP", "error", err)
-		os.Exit(1)
-	}
-
 	log.Info("server listening", "address", cfg.Server.ListenAddr)
 
+	serveErr := make(chan error, 1)
+	go func() {
+		serveErr <- httpServer.ListenAndServe()
+	}()
+
 	select {
+	case err := <-serveErr:
+		log.Error("serve HTTP", "error", err)
+		os.Exit(1)
 	case <-ctx.Done():
-		os.Exit(0)
+		deps.BSI.Close()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			log.Error("shutdown HTTP", "error", err)
+			httpServer.Close()
+		}
 	}
-
-	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	deps.BSI.Close()
-	if err := httpServer.Shutdown(shutdown); err != nil {
-		log.Error("shutdown HTTP", "error", err)
-		httpServer.Close()
-	}
-
-	sqlDB.Close()
-	os.Exit(1)
 }
