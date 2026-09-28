@@ -2,7 +2,6 @@ package utils
 
 import (
 	"encoding/hex"
-	"strings"
 
 	"github.com/google/uuid"
 )
@@ -17,5 +16,5 @@ func NormalizeUUID(id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return strings.ReplaceAll(u.String(), "-", ""), nil
+	return hex.EncodeToString(u[:]), nil
 }

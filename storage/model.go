@@ -1,8 +1,8 @@
 package storage
 
 import (
+	"encoding/hex"
 	"strconv"
-	"strings"
 	"uuid"
 )
 
@@ -37,7 +37,7 @@ func NewMinecraftIdentity(uid uuid.UUID, minecraftID uuid.UUID, bindFrom BindFro
 	return &KaemanIdentity{
 		UID:      uid,
 		Platform: PlatformMinecraft,
-		Identity: strings.ReplaceAll(minecraftID.String(), "-", ""),
+		Identity: hex.EncodeToString(minecraftID[:]),
 		BindFrom: bindFrom,
 	}
 }
