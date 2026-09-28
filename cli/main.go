@@ -25,6 +25,9 @@ import (
 	"github.com/kaeman-dev/kaeman-public-api/storage"
 	gocache_lib "github.com/patrickmn/go-cache"
 	"github.com/redis/go-redis/v9"
+	"github.com/ulule/limiter/v3"
+	limiter_memstore "github.com/ulule/limiter/v3/drivers/store/memory"
+	limiter_redisstore "github.com/ulule/limiter/v3/drivers/store/redis"
 )
 
 func main() {
@@ -80,8 +83,15 @@ func main() {
 			os.Exit(1)
 		}
 		deps.Cache = cache.New[string](redis_store.NewRedis(client))
+		limiterStore, err := limiter_redisstore.NewStoreWithOptions(client, limiter.StoreOptions{})
+		if err != nil {
+			log.Error("initialize ratelimiter", "error", err)
+			os.Exit(1)
+		}
+		deps.RateLimit = limiterStore
 	} else {
 		deps.Cache = cache.New[string](go_cache_store.NewGoCache(gocache_lib.New(5*time.Minute, 10*time.Minute)))
+		deps.RateLimit = limiter_memstore.NewStore()
 	}
 
 	httpServer := &http.Server{Addr: cfg.Server.ListenAddr, Handler: router.NewRouter(deps), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}

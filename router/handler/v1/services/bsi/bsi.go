@@ -13,7 +13,7 @@ func Register(rg *gin.RouterGroup, deps *server.Services) {
 	rg.POST("/queue", middleware.Chain(h.Send,
 		middleware.PublicAPIKey(deps, false, permission.SplasherQueue),
 		middleware.MinecraftToken(deps, false),
-		middleware.RateLimit(deps.Cache),
+		middleware.RateLimit(deps.RateLimit),
 	))
 
 	rg.GET("/gateway", deps.BSI.Listen)

@@ -10,6 +10,6 @@ import (
 
 func Register(rg *gin.RouterGroup, deps *server.Services) {
 	h := api.Handler{Services: deps}
-	rg.GET("/check", middleware.Chain(h.Check, middleware.PublicAPIKey(deps, false, 0), middleware.RateLimit(deps.Cache)))
+	rg.GET("/check", middleware.Chain(h.Check, middleware.PublicAPIKey(deps, false, 0), middleware.RateLimit(deps.RateLimit)))
 	minecraft.Register(rg.Group("/minecraft"), deps)
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/kaeman-dev/kaeman-public-api/gateway"
 	"github.com/kaeman-dev/kaeman-public-api/jwt"
 	"github.com/kaeman-dev/kaeman-public-api/minecraft"
+	"github.com/ulule/limiter/v3"
 	"gorm.io/gorm"
 )
 
@@ -16,5 +17,6 @@ type Services struct {
 	Tokens    *jwt.Token
 	Minecraft *minecraft.Client
 	Cache     *cache.Cache[string]
+	RateLimit limiter.Store
 	BSI       *gateway.Hub
 }
