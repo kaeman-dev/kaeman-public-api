@@ -1,10 +1,5 @@
-env "generate" {
+env "pg" {
   src = "file://schema.hcl"
-  dev = "docker://postgres/16/dev?search_path=public"
-
-  format {
-    schema {
-      inspect = file("models.tmpl")
-    }
-  }
+  dev = getenv("ATLAS_DEV_URL")
+  url = getenv("KAEMAN_DATABASE_URL")
 }
