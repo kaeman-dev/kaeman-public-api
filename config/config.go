@@ -58,7 +58,7 @@ func Load(path string) (*Config, error) {
 				ListenAddr: ":38080",
 			},
 			Database: Database{
-				DSN: "./data/kaeman.db",
+				DSN: "sqlite://./data/kaeman.db",
 			},
 			Minecraft: Minecraft{
 				MojangSessionBaseURL: "https://sessionserver.mojang.com",

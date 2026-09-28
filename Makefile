@@ -14,16 +14,8 @@ run: build
 clean:
 	rm -f $(BINARY_NAME)
 
-release:
-	@echo Running release tool...
-	@python ./scripts/release/tag.py
+models:
+	@atlas schema inspect --config storage/atlas/atlas.hcl --env generate --url env://src > storage/models_gen.go && gofmt -w storage/models_gen.go
 
-schema:
-	@echo Generating schema...
-	@go run ./scripts/schema/main.go
-
-test_goreleaser:
-	@echo Running goreleaser...
-	@goreleaser release --snapshot --clean
 
 -include Makefile.local

@@ -1,0 +1,106 @@
+{{- /* project custom */ -}}
+{{- define "gotype" -}}
+{{- if eq .Name "deleted_at" -}}
+{{- "gorm.DeletedAt" -}}
+{{- else if eq .Name "platform" -}}
+{{- "Platform" -}}
+{{- else if eq .Name "bind_from" -}}
+{{- "BindFrom" -}}
+{{- else -}}
+{{- $m := dict "uuid" "uuid.UUID" "text" "string" "timestamp with time zone" "time.Time" -}}
+{{- with $t := columnType . -}}
+{{- if hasKey $m $t -}}
+{{- get $m $t -}}
+{{- else -}}
+{{- "any" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "plural" -}}
+{{- if hasSuffix . "y" -}}
+{{- printf "%sies" (trimSuffix . "y") -}}
+{{- else -}}
+{{- printf "%ss" . -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "model" -}}
+{{- $t := .table -}}
+{{- $name := exec "title" $t.Name | exec "singular" -}}
+{{- $pkcols := list -}}
+{{- if $t.PrimaryKey -}}
+{{- $pkcols = $t.PrimaryKey.Columns -}}
+{{- end -}}
+type {{ $name }} struct {
+{{- range $c := $t.Columns }}
+{{- $tag := list -}}
+{{- $ispk := false -}}
+{{- range $p := $pkcols -}}
+{{- if eq $p.Name $c.Name -}}
+{{- $ispk = true -}}
+{{- end -}}
+{{- end -}}
+{{- $isidx := false -}}
+{{- range $i := $t.Indexes -}}
+{{- range $ic := $i.Columns -}}
+{{- if eq $ic.Name $c.Name -}}
+{{- $isidx = true -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not (or (eq $c.Name "created_at") (eq $c.Name "updated_at") (eq $c.Name "deleted_at")) }}
+	{{ exec "title" $c.Name }} {{ exec "gotype" $c }} `gorm:"{{ if eq (columnType $c) "uuid" }}{{ $tag = append $tag "type:uuid" }}{{ end }}{{ if $c.Default }}{{ $tag = append $tag (printf "default:%s" $c.Default) }}{{ end }}{{ if and (not $c.Null) (not $ispk) }}{{ $tag = append $tag "not null" }}{{ end }}{{ if $ispk }}{{ $tag = append $tag "primaryKey" }}{{ end }}{{ if and $isidx (not $ispk) }}{{ $tag = append $tag "index" }}{{ end }}{{ join $tag ";" }}"`
+{{- else }}
+	{{ exec "title" $c.Name }} {{ exec "gotype" $c }}
+{{- end -}}
+{{- end -}}
+{{- range $t2 := $.realm.Tables -}}
+{{- range $fk := $t2.ForeignKeys -}}
+{{- if eq $fk.RefTable.Name $t.Name }}
+	{{ exec "title" $t2.Name | exec "singular" | exec "plural" }} []{{ exec "title" $t2.Name | exec "singular" }} `gorm:"foreignKey:{{ exec "title" (index $fk.Columns 0).Name }};references:{{ exec "title" (index $fk.RefColumns 0).Name }}"`
+{{- end -}}
+{{- end -}}
+{{- end -}}
+}
+{{- end -}}
+
+{{- assert (eq (len .Realm.Schemas) 1) "only one schema is supported" -}}
+package storage
+
+import (
+	"time"
+
+	"uuid"
+
+	"gorm.io/gorm"
+)
+
+{{ range $t := (index .Realm.Schemas 0).Tables }}
+{{- include "model" (dict "table" $t "realm" (index .Realm.Schemas 0)) }}
+{{ end -}}
+
+{{- /* atlas default, title modified: short words uppercased (uid -> UID) */ -}}
+{{- define "title" -}}
+{{- $v := "" -}}
+{{- range $w := splitBy . "_" -}}
+{{- if le (len $w) 3 -}}
+{{- $v = print $v (upper $w) -}}
+{{- else -}}
+{{- $v = print $v (upper (slice $w 0 1)) (lower (slice $w 1)) -}}
+{{- end -}}
+{{- end -}}
+{{ print $v }}
+{{- end -}}
+
+{{- define "singular" -}}
+{{- $s := . -}}
+{{- if and (hasSuffix $s "ies") (gt (len $s) 3) -}}
+{{- printf "%sy" (slice $s 0 (sub (len $s) 3)) -}}
+{{- else if and (hasSuffix $s "s") (gt (len $s) 1) -}}
+{{- trimSuffix $s "s" -}}
+{{- else -}}
+{{- $s -}}
+{{- end -}}
+{{- end -}}
